@@ -39,24 +39,6 @@ jobs:
           title: "chore: version release"
           commit: "chore: version release"
           version: bash .github/scripts/version.sh
-          publish: echo "publish"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and Release
-        if: steps.changesets.outputs.published == 'true'
-        run: |
-          # Read version from package.json (source of truth for changesets)
-          VERSION=$(node -p "require('./package.json').version")
-          echo "Releasing version $VERSION"
-
-          # Build the Python package
-          python -m build
-
-          # Create a GitHub release with the wheel and sdist
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --generate-notes \
-            dist/*
+          publish: bash .github/scripts/publish.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
