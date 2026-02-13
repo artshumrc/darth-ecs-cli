@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Install changesets and its changelog plugin
+npm install --no-save @changesets/cli @changesets/changelog-github
+
 # Bump version via changesets
-npx @changesets/cli version
+npx changeset version
 
 # Sync version from package.json into pyproject.toml
 python3 -c "
