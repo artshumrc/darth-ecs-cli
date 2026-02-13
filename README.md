@@ -115,3 +115,24 @@ my-webapp-infra/
       alb.py               # ALB shared lookup or dedicated
       secrets.py           # Secrets Manager integration
 ```
+
+## Contributing
+
+This project uses [changesets](https://github.com/changesets/changesets) for version management and releases.
+
+When you make a change that should be released, add a changeset before opening your PR:
+
+```bash
+npx @changesets/cli init 
+npx @changesets/cli
+```
+
+You'll be prompted to select a version bump type (major, minor, or patch) and write a summary of your change. Commit the generated changeset file alongside your code.
+
+When changesets are merged to `main`, a "Version Release" PR is automatically opened. Merging that PR triggers a GitHub release with the built Python wheel attached.
+
+### Installing from a GitHub Release
+
+```bash
+pip install https://github.com/artshumrc/darth-ecs-cli/releases/download/v0.1.0/darth_ecs-0.1.0-py3-none-any.whl
+```
