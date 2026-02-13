@@ -1,4 +1,4 @@
-"""Textual TUI application for ``darth-ecs init``."""
+"""Textual TUI application for ``darth-infra init``."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .screens.review import ReviewScreen
 
 
 class DarthEcsInitApp(App[None]):
-    """Interactive setup wizard for darth-ecs projects."""
+    """Interactive setup wizard for darth-infra projects."""
 
     CSS = """
     Screen {

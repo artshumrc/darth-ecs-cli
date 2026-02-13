@@ -1,5 +1,5 @@
 [project]
-name = "darth-ecs"
+name = "darth-infra"
 version = "0.0.4"
 description = "A CLI tool for deploying websites to AWS ECS with multi-environment support"
 readme = "README.md"
@@ -14,14 +14,14 @@ dependencies = [
 ]
 
 [project.scripts]
-darth-ecs = "darth_ecs.cli.main:cli"
+darth-infra = "darth_infra.cli.main:cli"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/darth_ecs"]
+packages = ["src/darth_infra"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/darth_ecs/darth-ecs.schema.json" = "darth_ecs/darth-ecs.schema.json"
+"src/darth_infra/darth-infra.schema.json" = "darth_infra/darth-infra.schema.json"

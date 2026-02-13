@@ -36,16 +36,16 @@ def generate_project(config: ProjectConfig, output_dir: Path) -> Path:
     _render(jinja_env, "pyproject.toml.j2", output_dir / "pyproject.toml", ctx)
     _render(jinja_env, "README.md.j2", output_dir / "README.md", ctx)
 
-    # Write darth-ecs.toml (the source of truth config)
+    # Write darth-infra.toml (the source of truth config)
     from ..config.loader import dump_config
 
-    toml_path = output_dir / "darth-ecs.toml"
+    toml_path = output_dir / "darth-infra.toml"
     toml_path.write_text(dump_config(config))
 
     # Copy the JSON schema for editor support
-    schema_src = Path(__file__).resolve().parent.parent / "darth-ecs.schema.json"
+    schema_src = Path(__file__).resolve().parent.parent / "darth-infra.schema.json"
     if schema_src.exists():
-        shutil.copy2(schema_src, output_dir / "darth-ecs.schema.json")
+        shutil.copy2(schema_src, output_dir / "darth-infra.schema.json")
 
     # Render stacks
     stacks_dir = output_dir / "stacks"

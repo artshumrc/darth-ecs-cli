@@ -38,7 +38,7 @@ def require_prod_deployed(config: ProjectConfig, env: str) -> None:
     except Exception:
         console.print(
             f"[red]Prod stack '{stack_name}' must be deployed before "
-            f"deploying '{env}'. Run: darth-ecs deploy --env prod[/red]"
+            f"deploying '{env}'. Run: darth-infra deploy --env prod[/red]"
         )
         sys.exit(1)
 

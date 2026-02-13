@@ -1,4 +1,4 @@
-"""``darth-ecs deploy`` — deploy an environment."""
+"""``darth-infra deploy`` — deploy an environment."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def deploy(env_name: str, require_approval: str) -> None:
 
     if env_name not in config.environments:
         console.print(
-            f"[red]Environment '{env_name}' not found in darth-ecs.toml. "
+            f"[red]Environment '{env_name}' not found in darth-infra.toml. "
             f"Available: {', '.join(config.environments)}[/red]"
         )
         raise SystemExit(1)

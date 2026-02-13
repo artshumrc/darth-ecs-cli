@@ -1,4 +1,4 @@
-"""``darth-ecs build`` — build Docker images for all services."""
+"""``darth-infra build`` — build Docker images for all services."""
 
 from __future__ import annotations
 

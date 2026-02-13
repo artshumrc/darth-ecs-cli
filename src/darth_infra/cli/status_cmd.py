@@ -1,4 +1,4 @@
-"""``darth-ecs status`` — show environment status."""
+"""``darth-infra status`` — show environment status."""
 
 from __future__ import annotations
 

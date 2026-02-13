@@ -18,4 +18,4 @@ gh release create "v${VERSION}" \
   --generate-notes \
   dist/*
 
-echo "Published darth-ecs v${VERSION}"
+echo "Published darth-infra v${VERSION}"

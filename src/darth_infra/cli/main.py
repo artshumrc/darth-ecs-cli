@@ -1,4 +1,4 @@
-"""darth-ecs CLI — main entry point."""
+"""darth-infra CLI — main entry point."""
 
 import click
 
@@ -13,9 +13,9 @@ from .status_cmd import status
 
 
 @click.group()
-@click.version_option(package_name="darth-ecs")
+@click.version_option(package_name="darth-infra")
 def cli() -> None:
-    """darth-ecs — Deploy websites to AWS ECS with multi-environment support."""
+    """darth-infra — Deploy websites to AWS ECS with multi-environment support."""
 
 
 cli.add_command(init_cmd, name="init")

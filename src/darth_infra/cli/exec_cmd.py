@@ -1,4 +1,4 @@
-"""``darth-ecs exec`` — interactive shell into an ECS container."""
+"""``darth-infra exec`` — interactive shell into an ECS container."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""``darth-ecs logs`` — tail CloudWatch logs from an ECS service."""
+"""``darth-infra logs`` — tail CloudWatch logs from an ECS service."""
 
 from __future__ import annotations
 

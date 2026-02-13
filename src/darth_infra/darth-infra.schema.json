@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/dflood/darth-ecs-cli/darth-ecs.schema.json",
-  "title": "darth-ecs.toml",
-  "description": "Configuration schema for darth-ecs ECS/Fargate projects.",
+  "$id": "https://github.com/dflood/darth-infra-cli/darth-infra.schema.json",
+  "title": "darth-infra.toml",
+  "description": "Configuration schema for darth-infra ECS/Fargate projects.",
   "type": "object",
   "required": ["project", "services"],
   "additionalProperties": false,

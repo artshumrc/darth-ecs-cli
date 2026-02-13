@@ -1,4 +1,4 @@
-"""``darth-ecs destroy`` — tear down an environment's stack."""
+"""``darth-infra destroy`` — tear down an environment's stack."""
 
 from __future__ import annotations
 

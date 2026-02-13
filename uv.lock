@@ -52,8 +52,8 @@ wheels = [
 ]
 
 [[package]]
-name = "darth-ecs"
-version = "0.1.0"
+name = "darth-infra"
+version = "0.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },

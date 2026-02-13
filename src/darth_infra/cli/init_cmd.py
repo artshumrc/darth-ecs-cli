@@ -1,4 +1,4 @@
-"""``darth-ecs init`` — interactive project setup using Textual TUI."""
+"""``darth-infra init`` — interactive project setup using Textual TUI."""
 
 from __future__ import annotations
 
@@ -30,14 +30,14 @@ console = Console()
     "config_path",
     type=click.Path(exists=True, path_type=Path),
     default=None,
-    help="Path to an existing darth-ecs.toml (for non-interactive mode).",
+    help="Path to an existing darth-infra.toml (for non-interactive mode).",
 )
 def init_cmd(
     output_dir: Path | None,
     non_interactive: bool,
     config_path: Path | None,
 ) -> None:
-    """Interactively scaffold a new darth-ecs CDK project."""
+    """Interactively scaffold a new darth-infra CDK project."""
     from ..config.loader import load_config
     from ..scaffold.generator import generate_project
 
@@ -65,5 +65,5 @@ def init_cmd(
     result = generate_project(config, out)
     console.print(f"\n[green]✓ Project scaffolded at {result}[/green]")
     console.print(
-        f"\n[dim]Next steps:[/dim]\n  cd {result.name}\n  darth-ecs deploy --env prod\n"
+        f"\n[dim]Next steps:[/dim]\n  cd {result.name}\n  darth-infra deploy --env prod\n"
     )

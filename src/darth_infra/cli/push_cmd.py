@@ -1,4 +1,4 @@
-"""``darth-ecs push`` — tag and push Docker images to ECR."""
+"""``darth-infra push`` — tag and push Docker images to ECR."""
 
 from __future__ import annotations
 

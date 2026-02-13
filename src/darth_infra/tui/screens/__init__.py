@@ -1,5 +1,3 @@
-"""Load and save ProjectConfig from/to darth-ecs.toml."""
-
 from __future__ import annotations
 
 import sys
@@ -11,7 +9,7 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib  # type: ignore[import-not-found]
 
-from .models import (
+from ...config.models import (
     AlbConfig,
     AlbMode,
     EnvironmentOverride,
@@ -23,11 +21,11 @@ from .models import (
     ServiceConfig,
 )
 
-CONFIG_FILENAME = "darth-ecs.toml"
+CONFIG_FILENAME = "darth-infra.toml"
 
 
 def find_config(start: Path | None = None) -> Path:
-    """Walk up from *start* (default: cwd) to find ``darth-ecs.toml``."""
+    """Walk up from *start* (default: cwd) to find ``darth-infra.toml``."""
     current = (start or Path.cwd()).resolve()
     while True:
         candidate = current / CONFIG_FILENAME
@@ -43,7 +41,7 @@ def find_config(start: Path | None = None) -> Path:
 
 
 def load_config(path: Path | None = None) -> ProjectConfig:
-    """Parse ``darth-ecs.toml`` into a ``ProjectConfig``."""
+    """Parse ``darth-infra.toml`` into a ``ProjectConfig``."""
     config_path = path or find_config()
     with open(config_path, "rb") as f:
         raw = tomllib.load(f)
@@ -87,13 +85,11 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
 
 
 def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
-    # Port defaults to None if not explicitly set (background workers have no port)
-    port = raw.get("port")
     return ServiceConfig(
         name=raw["name"],
         dockerfile=raw.get("dockerfile", "Dockerfile"),
         build_context=raw.get("build_context", "."),
-        port=port,
+        port=raw.get("port", 8000),
         health_check_path=raw.get("health_check_path", "/health"),
         cpu=raw.get("cpu", 256),
         memory_mib=raw.get("memory_mib", 512),
@@ -157,8 +153,6 @@ def dump_config(config: ProjectConfig) -> str:
     """Serialize a ``ProjectConfig`` to TOML string."""
     lines: list[str] = []
 
-    lines.append("#:schema darth-ecs.schema.json")
-    lines.append("")
     lines.append("[project]")
     lines.append(f'name = "{config.project_name}"')
     lines.append(f'aws_region = "{config.aws_region}"')

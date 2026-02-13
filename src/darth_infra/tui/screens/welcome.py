@@ -17,7 +17,7 @@ class WelcomeScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="form-container"):
-            yield Static("darth-ecs — New Project Setup", classes="title")
+            yield Static("darth-infra — New Project Setup", classes="title")
 
             yield Label("Project name (kebab-case):", classes="section-label")
             yield Input(

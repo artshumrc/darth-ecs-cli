@@ -1,4 +1,4 @@
-"""Strongly-typed configuration models for darth-ecs projects."""
+"""Strongly-typed configuration models for darth-infra projects."""
 
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ class EnvironmentOverride:
 
 @dataclass
 class ProjectConfig:
-    """Top-level project configuration. Written to / read from ``darth-ecs.toml``.
+    """Top-level project configuration. Written to / read from ``darth-infra.toml``.
 
     Attributes:
         project_name: Short kebab-case project name (e.g. "my-webapp").
