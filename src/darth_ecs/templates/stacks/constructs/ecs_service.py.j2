@@ -1,0 +1,223 @@
+"""ECS Fargate service construct."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from aws_cdk import (
+    Duration,
+    RemovalPolicy,
+    Stack,
+    aws_ec2,
+    aws_ecr,
+    aws_ecs,
+    aws_iam,
+    aws_logs,
+    aws_secretsmanager,
+)
+from constructs import Construct
+
+from .alb import AlbProvider
+
+
+class EcsService(Construct):
+    """Deploys a single Fargate service behind an ALB."""
+
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        vpc: aws_ec2.IVpc,
+        project_name: str,
+        env_name: str,
+        service_name: str,
+        ecr_repo: aws_ecr.IRepository,
+        container_port: int | None,
+        health_check_path: str,
+        cpu: int,
+        memory_mib: int,
+        desired_count: int,
+        command: str | None,
+        domain: str | None,
+        extra_env_vars: dict[str, str],
+        secret_arns: dict[str, str],
+        s3_bucket_arns: list[str],
+        alb_provider: AlbProvider,
+        enable_exec: bool = True,
+    ) -> None:
+        super().__init__(scope, construct_id)
+
+        prefix = f"{project_name}-{env_name}-{service_name}"
+
+        # --- Log group -------------------------------------------------------
+        log_group = aws_logs.LogGroup(
+            self,
+            "Logs",
+            log_group_name=f"/ecs/{prefix}",
+            retention=aws_logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        # --- Cluster ---------------------------------------------------------
+        cluster = aws_ecs.Cluster(
+            self,
+            "Cluster",
+            vpc=vpc,
+            cluster_name=f"{project_name}-{env_name}",
+            container_insights_v2=aws_ecs.ContainerInsights.ENABLED,
+        )
+
+        # --- Security group --------------------------------------------------
+        self.task_security_group = aws_ec2.SecurityGroup(
+            self,
+            "TaskSg",
+            vpc=vpc,
+            description=f"{prefix} ECS tasks",
+            allow_all_outbound=True,
+        )
+
+        # --- IAM roles -------------------------------------------------------
+        execution_role = aws_iam.Role(
+            self,
+            "ExecRole",
+            assumed_by=aws_iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+            managed_policies=[
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AmazonECSTaskExecutionRolePolicy"
+                ),
+            ],
+        )
+
+        task_role = aws_iam.Role(
+            self,
+            "TaskRole",
+            assumed_by=aws_iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+        )
+
+        # ECS Exec permissions
+        if enable_exec:
+            task_role.add_to_policy(
+                aws_iam.PolicyStatement(
+                    actions=[
+                        "ssmmessages:CreateControlChannel",
+                        "ssmmessages:CreateDataChannel",
+                        "ssmmessages:OpenControlChannel",
+                        "ssmmessages:OpenDataChannel",
+                    ],
+                    resources=["*"],
+                )
+            )
+
+        # S3 permissions
+        if s3_bucket_arns:
+            task_role.add_to_policy(
+                aws_iam.PolicyStatement(
+                    actions=[
+                        "s3:GetObject",
+                        "s3:PutObject",
+                        "s3:DeleteObject",
+                        "s3:ListBucket",
+                    ],
+                    resources=[
+                        arn for bucket_arn in s3_bucket_arns
+                        for arn in [bucket_arn, f"{bucket_arn}/*"]
+                    ],
+                )
+            )
+
+        # Secrets Manager read permissions
+        if secret_arns:
+            for secret_name, arn in secret_arns.items():
+                aws_secretsmanager.Secret.from_secret_complete_arn(
+                    self, f"SecretRef-{secret_name}", secret_complete_arn=arn
+                ).grant_read(execution_role)
+
+        # --- Task definition -------------------------------------------------
+        task_def = aws_ecs.FargateTaskDefinition(
+            self,
+            "Task",
+            cpu=cpu,
+            memory_limit_mib=memory_mib,
+            execution_role=execution_role,
+            task_role=task_role,
+            family=prefix,
+        )
+
+        # Environment variables
+        env_vars: dict[str, str] = {
+            "ENVIRONMENT": env_name,
+            "SERVICE_NAME": service_name,
+            **extra_env_vars,
+        }
+
+        # Secrets from Secrets Manager
+        ecs_secrets: dict[str, aws_ecs.Secret] = {}
+        for secret_name, arn in secret_arns.items():
+            ecs_secrets[secret_name] = aws_ecs.Secret.from_secrets_manager(
+                aws_secretsmanager.Secret.from_secret_complete_arn(
+                    self, f"EcsSecret-{secret_name}", secret_complete_arn=arn
+                )
+            )
+
+        container = task_def.add_container(
+            "Container",
+            image=aws_ecs.ContainerImage.from_ecr_repository(
+                ecr_repo, tag=f"{env_name}-latest"
+            ),
+            logging=aws_ecs.LogDrivers.aws_logs(
+                stream_prefix=service_name,
+                log_group=log_group,
+            ),
+            environment=env_vars,
+            secrets=ecs_secrets,
+            container_name=service_name,
+        )
+
+        if command:
+            container.add_container_dependencies()  # no-op, just ensure order
+            # Override the entrypoint with a shell command
+            task_def_cfn = task_def.node.default_child
+            # Use command override via container definition
+            container_node = container.node.default_child
+            container.add_environment("_CMD_OVERRIDE", command)
+
+        if container_port is not None:
+            container.add_port_mappings(
+                aws_ecs.PortMapping(
+                    container_port=container_port,
+                    protocol=aws_ecs.Protocol.TCP,
+                )
+            )
+
+        # --- Fargate service -------------------------------------------------
+        service = aws_ecs.FargateService(
+            self,
+            "Service",
+            cluster=cluster,
+            task_definition=task_def,
+            desired_count=desired_count,
+            security_groups=[self.task_security_group],
+            assign_public_ip=False,
+            service_name=prefix,
+            enable_execute_command=enable_exec,
+            vpc_subnets=aws_ec2.SubnetSelection(
+                subnet_type=aws_ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ),
+        )
+
+        # --- ALB integration -------------------------------------------------
+        if container_port is not None and domain:
+            alb_provider.task_security_group = self.task_security_group
+            self.task_security_group.add_ingress_rule(
+                alb_provider.alb_security_group,
+                aws_ec2.Port.tcp(container_port),
+                "ALB to ECS task",
+            )
+            alb_provider.add_target(
+                f"{env_name}-{service_name}",
+                targets=[service],
+                port=container_port,
+                health_check_path=health_check_path,
+                host_header=domain,
+            )
