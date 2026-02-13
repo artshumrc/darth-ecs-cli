@@ -58,6 +58,10 @@ class _ServiceCfg:
     s3_access: list[str] = field(default_factory=list)
     environment_variables: dict[str, str] = field(default_factory=dict)
     enable_exec: bool = True
+    launch_type: str = "fargate"
+    ec2_instance_type: str | None = None
+    user_data_script: str | None = None
+    ebs_volumes: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -97,6 +101,7 @@ class _AlbCfg:
 class _EnvOverride:
     domain_overrides: dict[str, str] = field(default_factory=dict)
     instance_type_override: str | None = None
+    ec2_instance_type_override: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -271,6 +276,17 @@ class MainStack(Stack):
         {% endif %}
 
         # --- ECS services ----------------------------------------------------
+        {% if has_ec2 %}
+        # Find EBS snapshots from prod for non-prod environments
+        ebs_snapshot_map: dict[str, dict[str, str]] = {}
+        if env_name != "prod":
+            for svc in config.services:
+                if svc.launch_type == "ec2" and svc.ebs_volumes:
+                    ebs_snapshot_map[svc.name] = self._find_prod_ebs_snapshots(
+                        config, svc.name, svc.ebs_volumes
+                    )
+        {% endif %}
+
         for svc in config.services:
             domain = config.domain_for(svc.name, env_name)
 
@@ -316,6 +332,13 @@ class MainStack(Stack):
                 s3_bucket_arns=s3_bucket_arns,
                 alb_provider=alb_provider,
                 enable_exec=svc.enable_exec,
+                launch_type=svc.launch_type,
+                ec2_instance_type=self._resolve_ec2_instance_type(config, svc.name, env_name),
+                user_data_script=svc.user_data_script,
+                ebs_volumes=svc.ebs_volumes,
+                {% if has_ec2 %}
+                ebs_snapshot_ids=ebs_snapshot_map.get(svc.name, {}),
+                {% endif %}
             )
 
             # Wire security groups
@@ -345,4 +368,53 @@ class MainStack(Stack):
         except Exception:
             pass
         return None
+    {% endif %}
+
+    def _resolve_ec2_instance_type(
+        self, config: ProjectConfig, service_name: str, env_name: str
+    ) -> str | None:
+        """Resolve EC2 instance type, applying per-environment overrides."""
+        svc = next((s for s in config.services if s.name == service_name), None)
+        if svc is None or svc.launch_type != "ec2":
+            return None
+        ov = config.environment_overrides.get(env_name)
+        if ov and service_name in ov.ec2_instance_type_override:
+            return ov.ec2_instance_type_override[service_name]
+        return svc.ec2_instance_type
+
+    {% if has_ec2 %}
+
+    def _find_prod_ebs_snapshots(
+        self,
+        config: ProjectConfig,
+        service_name: str,
+        ebs_volumes: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        """Find the latest EBS snapshots from prod for each volume.
+
+        Returns a mapping of volume name -> snapshot ID.
+        """
+        result: dict[str, str] = {}
+        try:
+            ec2_client = boto3.client("ec2", region_name=config.aws_region)
+            for vol in ebs_volumes:
+                response = ec2_client.describe_snapshots(
+                    Filters=[
+                        {"Name": "tag:Project", "Values": [config.project_name]},
+                        {"Name": "tag:Environment", "Values": ["prod"]},
+                        {"Name": "tag:Service", "Values": [service_name]},
+                        {"Name": "tag:VolumeName", "Values": [vol["name"]]},
+                    ],
+                    OwnerIds=["self"],
+                )
+                snapshots = sorted(
+                    response.get("Snapshots", []),
+                    key=lambda s: s.get("StartTime", ""),
+                    reverse=True,
+                )
+                if snapshots:
+                    result[vol["name"]] = snapshots[0]["SnapshotId"]
+        except Exception:
+            pass
+        return result
     {% endif %}

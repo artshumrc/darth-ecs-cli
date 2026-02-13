@@ -7,7 +7,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
-from ..config.models import ProjectConfig
+from ..config.models import ProjectConfig, LaunchType
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -86,6 +86,15 @@ def generate_project(config: ProjectConfig, output_dir: Path) -> Path:
     if any(b.cloudfront for b in config.s3_buckets):
         _render_construct(jinja_env, constructs_dir, "cloudfront_distribution.py", ctx)
 
+    # Copy user data scripts for EC2 services
+    for svc in config.services:
+        if svc.user_data_script:
+            src_script = Path.cwd() / svc.user_data_script
+            if src_script.is_file():
+                dest_script = output_dir / svc.user_data_script
+                dest_script.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_script, dest_script)
+
     return output_dir
 
 
@@ -100,6 +109,8 @@ def _build_context(config: ProjectConfig) -> dict:
         "has_rds": config.rds is not None,
         "has_s3": len(config.s3_buckets) > 0,
         "has_cloudfront": any(b.cloudfront for b in config.s3_buckets),
+        "has_ec2": any(s.launch_type == LaunchType.EC2 for s in config.services),
+        "has_ebs": any(s.ebs_volumes for s in config.services),
         "rds": config.rds,
         "s3_buckets": config.s3_buckets,
         "alb": config.alb,

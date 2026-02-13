@@ -10,6 +10,8 @@ from textual.widgets import Button, Static
 from ...config.models import (
     AlbConfig,
     AlbMode,
+    EbsVolumeConfig,
+    LaunchType,
     ProjectConfig,
     RdsConfig,
     S3BucketConfig,
@@ -48,7 +50,18 @@ class ReviewScreen(Screen):
         for svc in s["services"]:
             port_info = f":{svc['port']}" if svc.get("port") else " (worker)"
             domain_info = f" → {svc['domain']}" if svc.get("domain") else ""
-            lines.append(f"  • {svc['name']}{port_info}{domain_info}")
+            lt_info = ""
+            if svc.get("launch_type") == "ec2":
+                lt_info = f" [EC2: {svc.get('ec2_instance_type', '?')}]"
+            lines.append(f"  • {svc['name']}{port_info}{domain_info}{lt_info}")
+            if svc.get("user_data_script"):
+                lines.append(f"    User data: {svc['user_data_script']}")
+            if svc.get("ebs_volumes"):
+                for vol in svc["ebs_volumes"]:
+                    lines.append(
+                        f"    EBS: {vol['name']} "
+                        f"({vol['size_gb']}G → {vol['mount_path']})"
+                    )
 
         if s.get("rds"):
             rds = s["rds"]
@@ -102,6 +115,19 @@ class ReviewScreen(Screen):
                 domain=svc.get("domain"),
                 health_check_path=svc.get("health_check_path", "/health"),
                 command=svc.get("command"),
+                launch_type=LaunchType(svc.get("launch_type", "fargate")),
+                ec2_instance_type=svc.get("ec2_instance_type"),
+                user_data_script=svc.get("user_data_script"),
+                ebs_volumes=[
+                    EbsVolumeConfig(
+                        name=v["name"],
+                        size_gb=v["size_gb"],
+                        mount_path=v["mount_path"],
+                        device_name=v.get("device_name", "/dev/xvdf"),
+                        volume_type=v.get("volume_type", "gp3"),
+                    )
+                    for v in svc.get("ebs_volumes", [])
+                ],
             )
             for svc in s["services"]
         ]

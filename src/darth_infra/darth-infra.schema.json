@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/dflood/darth-infra-cli/darth-infra.schema.json",
   "title": "darth-infra.toml",
-  "description": "Configuration schema for darth-infra ECS/Fargate projects.",
+  "description": "Configuration schema for darth-infra ECS projects (Fargate and EC2 launch types).",
   "type": "object",
   "required": ["project", "services"],
   "additionalProperties": false,
@@ -51,7 +51,7 @@
     },
     "services": {
       "type": "array",
-      "description": "One or more ECS Fargate services to deploy.",
+      "description": "One or more ECS services to deploy (Fargate or EC2 launch type).",
       "minItems": 1,
       "items": {
         "type": "object",
@@ -86,13 +86,13 @@
           },
           "cpu": {
             "type": "integer",
-            "description": "Fargate task CPU units.",
+            "description": "Task CPU units. Fargate supports 256/512/1024/2048/4096; EC2 is unconstrained.",
             "default": 256,
-            "enum": [256, 512, 1024, 2048, 4096]
+            "minimum": 256
           },
           "memory_mib": {
             "type": "integer",
-            "description": "Fargate task memory in MiB.",
+            "description": "Task memory in MiB.",
             "default": 512,
             "minimum": 512
           },
@@ -135,6 +135,59 @@
             "type": "boolean",
             "description": "Enable ECS Exec for interactive shell access.",
             "default": true
+          },
+          "launch_type": {
+            "type": "string",
+            "description": "ECS launch type. \"fargate\" (default) or \"ec2\".",
+            "enum": ["fargate", "ec2"],
+            "default": "fargate"
+          },
+          "ec2_instance_type": {
+            "type": ["string", "null"],
+            "description": "EC2 instance type (required when launch_type is \"ec2\").",
+            "default": null,
+            "examples": ["t3.medium", "t3.large", "m5.large", "c5.xlarge"]
+          },
+          "user_data_script": {
+            "type": ["string", "null"],
+            "description": "Path to a shell script for EC2 user data, relative to project root.",
+            "default": null
+          },
+          "ebs_volumes": {
+            "type": "array",
+            "description": "EBS volumes to attach to EC2-backed ECS tasks.",
+            "items": {
+              "type": "object",
+              "required": ["name", "size_gb", "mount_path"],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Logical volume name for tagging and snapshot discovery."
+                },
+                "size_gb": {
+                  "type": "integer",
+                  "description": "Volume size in GiB.",
+                  "minimum": 1
+                },
+                "mount_path": {
+                  "type": "string",
+                  "description": "Container filesystem mount path (e.g. \"/data\")."
+                },
+                "device_name": {
+                  "type": "string",
+                  "description": "Linux block device name.",
+                  "default": "/dev/xvdf"
+                },
+                "volume_type": {
+                  "type": "string",
+                  "description": "EBS volume type.",
+                  "default": "gp3",
+                  "enum": ["gp2", "gp3", "io1", "io2", "st1", "sc1"]
+                }
+              }
+            },
+            "default": []
           }
         }
       }
@@ -287,6 +340,11 @@
             "type": ["string", "null"],
             "description": "Override RDS instance type for this environment.",
             "default": null
+          },
+          "ec2_instance_type_override": {
+            "type": "object",
+            "description": "Map of service name to EC2 instance type override for this environment.",
+            "additionalProperties": { "type": "string" }
           }
         }
       }

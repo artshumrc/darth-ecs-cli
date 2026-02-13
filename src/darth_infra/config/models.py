@@ -20,6 +20,13 @@ class AlbMode(str, Enum):
     DEDICATED = "dedicated"
 
 
+class LaunchType(str, Enum):
+    """ECS launch type for a service."""
+
+    FARGATE = "fargate"
+    EC2 = "ec2"
+
+
 @dataclass
 class SecretConfig:
     """A secret to inject into containers as an environment variable.
@@ -78,6 +85,25 @@ class RdsConfig:
 
 
 @dataclass
+class EbsVolumeConfig:
+    """An EBS volume to attach to an EC2-backed ECS task.
+
+    Attributes:
+        name: Logical volume name used for tagging and snapshot discovery.
+        size_gb: Volume size in GiB.
+        mount_path: Container filesystem mount path (e.g. "/data").
+        device_name: Linux block device name (e.g. "/dev/xvdf").
+        volume_type: EBS volume type.
+    """
+
+    name: str
+    size_gb: int
+    mount_path: str
+    device_name: str = "/dev/xvdf"
+    volume_type: str = "gp3"
+
+
+@dataclass
 class AlbConfig:
     """Application Load Balancer configuration.
 
@@ -95,7 +121,7 @@ class AlbConfig:
 
 @dataclass
 class ServiceConfig:
-    """A single ECS Fargate service (container).
+    """A single ECS service (container), running on Fargate or EC2.
 
     Attributes:
         name: Logical service name (e.g. "django", "celery-worker").
@@ -103,8 +129,8 @@ class ServiceConfig:
         build_context: Docker build context path, relative to project root.
         port: Container port exposed to the ALB. None for background workers.
         health_check_path: ALB health check endpoint.
-        cpu: Fargate task CPU units (256, 512, 1024, 2048, 4096).
-        memory_mib: Fargate task memory in MiB.
+        cpu: Task CPU units. Fargate supports 256-4096; EC2 is unconstrained.
+        memory_mib: Task memory in MiB.
         desired_count: Number of running tasks.
         command: Override the container CMD.
         domain: Hostname for ALB host-header routing. Required when port is set.
@@ -112,6 +138,10 @@ class ServiceConfig:
         s3_access: Names of ``S3BucketConfig`` entries to grant read/write.
         environment_variables: Static env vars passed to the container.
         enable_exec: Enable ECS Exec for interactive shell access.
+        launch_type: ECS launch type — "fargate" or "ec2".
+        ec2_instance_type: EC2 instance type (required when launch_type is "ec2").
+        user_data_script: Path to a shell script for EC2 user data (optional).
+        ebs_volumes: EBS volumes to attach (EC2 launch type only).
     """
 
     name: str
@@ -128,6 +158,10 @@ class ServiceConfig:
     s3_access: list[str] = field(default_factory=list)
     environment_variables: dict[str, str] = field(default_factory=dict)
     enable_exec: bool = True
+    launch_type: LaunchType = LaunchType.FARGATE
+    ec2_instance_type: str | None = None
+    user_data_script: str | None = None
+    ebs_volumes: list[EbsVolumeConfig] = field(default_factory=list)
 
 
 @dataclass
@@ -142,6 +176,9 @@ class EnvironmentOverride:
 
     instance_type_override: str | None = None
     """Override RDS instance type for this environment."""
+
+    ec2_instance_type_override: dict[str, str] = field(default_factory=dict)
+    """Map of service name -> EC2 instance type override for this environment."""
 
 
 @dataclass
@@ -190,6 +227,16 @@ class ProjectConfig:
                 raise ValueError(
                     f"Service '{svc.name}' exposes port {svc.port} "
                     f"but has no domain configured"
+                )
+            if svc.launch_type == LaunchType.EC2 and not svc.ec2_instance_type:
+                raise ValueError(
+                    f"Service '{svc.name}' uses EC2 launch type "
+                    f"but has no ec2_instance_type configured"
+                )
+            if svc.launch_type == LaunchType.FARGATE and svc.ebs_volumes:
+                raise ValueError(
+                    f"Service '{svc.name}' uses Fargate launch type "
+                    f"but has ebs_volumes configured (EBS is EC2-only)"
                 )
 
         bucket_names = [b.name for b in self.s3_buckets]

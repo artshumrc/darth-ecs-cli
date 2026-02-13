@@ -14,7 +14,9 @@ else:
 from .models import (
     AlbConfig,
     AlbMode,
+    EbsVolumeConfig,
     EnvironmentOverride,
+    LaunchType,
     ProjectConfig,
     RdsConfig,
     S3BucketConfig,
@@ -89,6 +91,18 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
 def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
     # Port defaults to None if not explicitly set (background workers have no port)
     port = raw.get("port")
+    launch_type_str = raw.get("launch_type", "fargate")
+    ebs_raw = raw.get("ebs_volumes", [])
+    ebs_volumes = [
+        EbsVolumeConfig(
+            name=v["name"],
+            size_gb=v["size_gb"],
+            mount_path=v["mount_path"],
+            device_name=v.get("device_name", "/dev/xvdf"),
+            volume_type=v.get("volume_type", "gp3"),
+        )
+        for v in ebs_raw
+    ]
     return ServiceConfig(
         name=raw["name"],
         dockerfile=raw.get("dockerfile", "Dockerfile"),
@@ -104,6 +118,10 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
         s3_access=raw.get("s3_access", []),
         environment_variables=raw.get("environment_variables", {}),
         enable_exec=raw.get("enable_exec", True),
+        launch_type=LaunchType(launch_type_str),
+        ec2_instance_type=raw.get("ec2_instance_type"),
+        user_data_script=raw.get("user_data_script"),
+        ebs_volumes=ebs_volumes,
     )
 
 
@@ -150,6 +168,7 @@ def _parse_env_override(raw: dict[str, Any]) -> EnvironmentOverride:
     return EnvironmentOverride(
         domain_overrides=raw.get("domain_overrides", {}),
         instance_type_override=raw.get("instance_type_override"),
+        ec2_instance_type_override=raw.get("ec2_instance_type_override", {}),
     )
 
 
@@ -189,6 +208,11 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f'command = "{svc.command}"')
         if svc.domain:
             lines.append(f'domain = "{svc.domain}"')
+        lines.append(f'launch_type = "{svc.launch_type.value}"')
+        if svc.ec2_instance_type:
+            lines.append(f'ec2_instance_type = "{svc.ec2_instance_type}"')
+        if svc.user_data_script:
+            lines.append(f'user_data_script = "{svc.user_data_script}"')
         if svc.secrets:
             sec_list = ", ".join(f'"{s}"' for s in svc.secrets)
             lines.append(f"secrets = [{sec_list}]")
@@ -201,6 +225,14 @@ def dump_config(config: ProjectConfig) -> str:
             for k, v in svc.environment_variables.items():
                 lines.append(f'"{k}" = "{v}"')
         lines.append(f"enable_exec = {str(svc.enable_exec).lower()}")
+        for vol in svc.ebs_volumes:
+            lines.append("")
+            lines.append("[[services.ebs_volumes]]")
+            lines.append(f'name = "{vol.name}"')
+            lines.append(f"size_gb = {vol.size_gb}")
+            lines.append(f'mount_path = "{vol.mount_path}"')
+            lines.append(f'device_name = "{vol.device_name}"')
+            lines.append(f'volume_type = "{vol.volume_type}"')
         lines.append("")
 
     if config.rds:
@@ -248,6 +280,11 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(
                 f'instance_type_override = "{override.instance_type_override}"'
             )
+        if override.ec2_instance_type_override:
+            lines.append("")
+            lines.append(f"[environments.{env_name}.ec2_instance_type_override]")
+            for svc_name, itype in override.ec2_instance_type_override.items():
+                lines.append(f'{svc_name} = "{itype}"')
         lines.append("")
 
     return "\n".join(lines) + "\n"
