@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.2.1
+
+### Patch Changes
+
+- [`002663c`](https://github.com/artshumrc/darth-infra-cli/commit/002663cc3c4e5ff9adf16baa55ae57474403ff83) Thanks [@d-flood](https://github.com/d-flood)! - add container env vars to tui
+
 ## 0.2.0
 
 ### Minor Changes
