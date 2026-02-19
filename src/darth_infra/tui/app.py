@@ -68,6 +68,9 @@ class DarthEcsInitApp(App[None]):
     Input {
         margin-bottom: 1;
     }
+    #ec2_fields {
+        height: auto;
+    }
     """
 
     BINDINGS = [

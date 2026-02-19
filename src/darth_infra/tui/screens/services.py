@@ -29,6 +29,8 @@ class ServicesScreen(Screen):
         self._editing_ebs_index: int | None = None
         self._ulimits: list[dict] = []
         self._editing_ulimit_index: int | None = None
+        self._env_vars: list[dict] = []
+        self._editing_env_var_index: int | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="screen-layout"):
@@ -80,6 +82,20 @@ class ServicesScreen(Screen):
 
                 yield Label("Command override (optional):", classes="section-label")
                 yield Input(placeholder="", id="svc_command")
+
+                # --- Environment variables sub-section ---
+                yield Static("Environment Variables", classes="title")
+                yield ListView(id="env-var-list")
+
+                yield Label("Variable name:", classes="section-label")
+                yield Input(placeholder="DJANGO_SETTINGS_MODULE", id="env_var_key")
+
+                yield Label("Value:", classes="section-label")
+                yield Input(placeholder="myapp.settings.production", id="env_var_value")
+
+                with Horizontal(classes="button-row"):
+                    yield Button("+ Add Env Var", id="env_var_add", variant="success")
+                    yield Button("Remove Env Var", id="env_var_remove", variant="error")
 
                 yield Checkbox(
                     "Enable service discovery (Cloud Map DNS)",
@@ -168,6 +184,7 @@ class ServicesScreen(Screen):
         self._update_mode()
         self._toggle_ec2_fields()
         self._refresh_ulimit_sidebar()
+        self._refresh_env_var_sidebar()
 
     def _refresh_sidebar(self) -> None:
         """Rebuild the sidebar list from current state."""
@@ -202,6 +219,13 @@ class ServicesScreen(Screen):
                     )
                 )
             )
+
+    def _refresh_env_var_sidebar(self) -> None:
+        """Rebuild the environment variable list."""
+        lv = self.query_one("#env-var-list", ListView)
+        lv.clear()
+        for ev in self._env_vars:
+            lv.append(ListItem(Static(f"{ev['key']}={ev['value']}")))
 
     def _toggle_ec2_fields(self) -> None:
         """Show or hide EC2-specific fields based on launch type selection."""
@@ -251,6 +275,15 @@ class ServicesScreen(Screen):
                 self.query_one("#ulimit_hard", Input).value = str(
                     ul.get("hard_limit", "")
                 )
+            return
+
+        if event.list_view.id == "env-var-list":
+            idx = event.list_view.index
+            if idx is not None and idx < len(self._env_vars):
+                self._editing_env_var_index = idx
+                ev = self._env_vars[idx]
+                self.query_one("#env_var_key", Input).value = ev.get("key", "")
+                self.query_one("#env_var_value", Input).value = ev.get("value", "")
             return
 
         idx = event.list_view.index
@@ -304,6 +337,12 @@ class ServicesScreen(Screen):
             self._editing_ulimit_index = None
             self._refresh_ulimit_sidebar()
 
+            # Environment variables
+            env_vars_dict = svc.get("environment_variables", {})
+            self._env_vars = [{"key": k, "value": v} for k, v in env_vars_dict.items()]
+            self._editing_env_var_index = None
+            self._refresh_env_var_sidebar()
+
             self._update_mode()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -323,6 +362,10 @@ class ServicesScreen(Screen):
             self._add_ulimit()
         elif event.button.id == "ulimit_remove":
             self._remove_ulimit()
+        elif event.button.id == "env_var_add":
+            self._add_env_var()
+        elif event.button.id == "env_var_remove":
+            self._remove_env_var()
         elif event.button.id == "next":
             name = self.query_one("#svc_name", Input).value.strip()
             if name and self._editing_index is None:
@@ -443,6 +486,51 @@ class ServicesScreen(Screen):
         self.query_one("#ulimit_hard", Input).value = ""
         self._editing_ulimit_index = None
 
+    def _add_env_var(self) -> None:
+        """Add an environment variable to the current service."""
+        key = self.query_one("#env_var_key", Input).value.strip()
+        value = self.query_one("#env_var_value", Input).value.strip()
+
+        if not key:
+            self.notify("Variable name is required", severity="error")
+            return
+
+        ev = {"key": key, "value": value}
+
+        if self._editing_env_var_index is not None:
+            self._env_vars[self._editing_env_var_index] = ev
+            self._editing_env_var_index = None
+        else:
+            # Prevent duplicate keys
+            for existing in self._env_vars:
+                if existing["key"] == key:
+                    self.notify(
+                        f"Variable '{key}' already exists — select it to edit",
+                        severity="error",
+                    )
+                    return
+            self._env_vars.append(ev)
+
+        self._clear_env_var_form()
+        self._refresh_env_var_sidebar()
+        self.notify(f"Added env var '{key}'")
+
+    def _remove_env_var(self) -> None:
+        """Remove the selected environment variable."""
+        if self._editing_env_var_index is not None:
+            key = self._env_vars[self._editing_env_var_index]["key"]
+            del self._env_vars[self._editing_env_var_index]
+            self._editing_env_var_index = None
+            self._clear_env_var_form()
+            self._refresh_env_var_sidebar()
+            self.notify(f"Removed env var '{key}'")
+
+    def _clear_env_var_form(self) -> None:
+        """Reset environment variable form fields."""
+        self.query_one("#env_var_key", Input).value = ""
+        self.query_one("#env_var_value", Input).value = ""
+        self._editing_env_var_index = None
+
     def _read_form(self) -> dict | None:
         """Read and validate the form fields."""
         name = self.query_one("#svc_name", Input).value.strip()
@@ -495,6 +583,8 @@ class ServicesScreen(Screen):
 
         ulimits = list(self._ulimits)
 
+        environment_variables = {ev["key"]: ev["value"] for ev in self._env_vars}
+
         return {
             "name": name,
             "dockerfile": self.query_one("#svc_dockerfile", Input).value.strip()
@@ -516,6 +606,7 @@ class ServicesScreen(Screen):
             "user_data_script": user_data_script,
             "ebs_volumes": ebs_volumes,
             "ulimits": ulimits,
+            "environment_variables": environment_variables,
         }
 
     def _add_service(self) -> None:
@@ -573,5 +664,9 @@ class ServicesScreen(Screen):
         self._editing_ulimit_index = None
         self._clear_ulimit_form()
         self._refresh_ulimit_sidebar()
+        self._env_vars = []
+        self._editing_env_var_index = None
+        self._clear_env_var_form()
+        self._refresh_env_var_sidebar()
         self._toggle_ec2_fields()
         self._update_mode()

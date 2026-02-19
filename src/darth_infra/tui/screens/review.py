@@ -78,6 +78,9 @@ class ReviewScreen(Screen):
                         f"    Ulimit: {ul['name']} "
                         f"(soft={ul['soft_limit']}, hard={ul['hard_limit']})"
                     )
+            if svc.get("environment_variables"):
+                for k, v in svc["environment_variables"].items():
+                    lines.append(f"    Env: {k}={v}")
 
         if s.get("rds"):
             rds = s["rds"]
@@ -156,6 +159,7 @@ class ReviewScreen(Screen):
                     )
                     for u in svc.get("ulimits", [])
                 ],
+                environment_variables=svc.get("environment_variables", {}),
                 enable_service_discovery=svc.get("enable_service_discovery", False),
             )
             for svc in s["services"]
