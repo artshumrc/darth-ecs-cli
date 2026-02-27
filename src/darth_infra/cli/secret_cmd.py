@@ -58,9 +58,9 @@ def _resolve_secret_id(config: ProjectConfig, env_name: str, secret: str) -> str
         return secret
 
     if cfg_secret.source.value == "generate":
-        return f"{config.project_name}-{env_name}-{secret.lower().replace('_', '-')}"
+        return f"/darth-infra/{config.project_name}/{env_name}/{secret}"
 
-    if cfg_secret.source.value == "env":
+    if cfg_secret.source.value in {"env", "existing"}:
         stack_name = f"{config.project_name}-ecs-{env_name}"
         param_key = f"EnvSecretArn{secret.replace('_', '').replace('-', '')}"
 

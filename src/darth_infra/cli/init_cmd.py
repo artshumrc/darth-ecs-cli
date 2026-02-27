@@ -38,7 +38,7 @@ console = Console()
     "--seed-out",
     "wizard_export_path",
     type=click.Path(path_type=Path),
-    default=Path.cwd() / "wizard-export.json",
+    default=Path.cwd() / ".darth-infra.json",
     show_default=True,
     help="Path to write wizard draft/export JSON (interactive mode).",
 )
@@ -47,7 +47,7 @@ console = Console()
     "seed_wizard_path",
     type=click.Path(exists=True, path_type=Path),
     default=None,
-    help="Load wizard seed data from a previous wizard-export.json.",
+    help="Load wizard seed data from a previous .darth-infra.json.",
 )
 def init_cmd(
     output_dir: Path | None,

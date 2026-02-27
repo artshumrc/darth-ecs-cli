@@ -41,7 +41,9 @@ class ExistingResourcesScreen(Screen):
             yield Select([], id="vpc_select", prompt="Select VPC", allow_blank=True)
 
             yield Label("Private Subnets (multi-select):", classes="section-label")
-            yield Button("Fetch Subnets for Selected VPC", id="fetch_subnets", variant="default")
+            yield Button(
+                "Fetch Subnets for Selected VPC", id="fetch_subnets", variant="default"
+            )
             yield SelectionList[str](id="private_subnet_select")
 
             yield Label("Public Subnets (multi-select):", classes="section-label")
@@ -50,7 +52,9 @@ class ExistingResourcesScreen(Screen):
             yield Label("Shared ALB (for shared mode):", classes="section-label")
             yield Button("Fetch ALBs", id="fetch_albs", variant="default")
             yield Select([], id="alb_select", prompt="Select ALB", allow_blank=True)
-            yield Button("Fetch Selected ALB Details", id="fetch_alb_details", variant="default")
+            yield Button(
+                "Fetch Selected ALB Details", id="fetch_alb_details", variant="default"
+            )
 
             yield Label("Shared listener ARN:", classes="section-label")
             yield Input(
@@ -102,6 +106,21 @@ class ExistingResourcesScreen(Screen):
     def _aws_region(self) -> str:
         return str(self._state.get("aws_region", "us-east-1"))
 
+    def _capture_form_scroll(self) -> tuple[float, float]:
+        container = self.query_one(".form-container", VerticalScroll)
+        scroll_x = float(getattr(container, "scroll_x", 0.0))
+        scroll_y = float(getattr(container, "scroll_y", 0.0))
+        return scroll_x, scroll_y
+
+    def _restore_form_scroll(self, scroll: tuple[float, float]) -> None:
+        container = self.query_one(".form-container", VerticalScroll)
+        scroll_x, scroll_y = scroll
+        self.call_after_refresh(
+            lambda: container.scroll_to(
+                x=scroll_x, y=scroll_y, animate=False, force=True
+            )
+        )
+
     @staticmethod
     def _is_select_empty(value: object) -> bool:
         null_sentinel = getattr(Select, "NULL", object())
@@ -145,10 +164,12 @@ class ExistingResourcesScreen(Screen):
         entries: list[tuple[str, str, dict[str, Any]]],
         err: str | None,
     ) -> None:
+        scroll = self._capture_form_scroll()
         self._fetching_vpcs = False
         self.query_one("#fetch_vpcs", Button).disabled = False
         if err:
             self.notify(f"AWS lookup failed: {err}", severity="error")
+            self._restore_form_scroll(scroll)
             return
 
         self._vpcs = {vpc_id: vpc for _, vpc_id, vpc in entries}
@@ -162,6 +183,7 @@ class ExistingResourcesScreen(Screen):
             select.value = entries[0][1]
 
         self.notify("Fetched VPCs", severity="information")
+        self._restore_form_scroll(scroll)
 
     def _start_fetch_subnets(self) -> None:
         if self._fetching_subnets:
@@ -172,7 +194,9 @@ class ExistingResourcesScreen(Screen):
             return
         self._fetching_subnets = True
         self.query_one("#fetch_subnets", Button).disabled = True
-        threading.Thread(target=self._fetch_subnets_worker, args=(str(vpc_id),), daemon=True).start()
+        threading.Thread(
+            target=self._fetch_subnets_worker, args=(str(vpc_id),), daemon=True
+        ).start()
 
     def _fetch_subnets_worker(self, vpc_id: str) -> None:
         try:
@@ -198,9 +222,7 @@ class ExistingResourcesScreen(Screen):
                 self._complete_fetch_subnets, private_entries, public_entries, None
             )
         except (ClientError, BotoCoreError, RuntimeError) as exc:
-            self.app.call_from_thread(
-                self._complete_fetch_subnets, [], [], str(exc)
-            )
+            self.app.call_from_thread(self._complete_fetch_subnets, [], [], str(exc))
 
     def _complete_fetch_subnets(
         self,
@@ -208,10 +230,12 @@ class ExistingResourcesScreen(Screen):
         public_entries: list[tuple[str, str]],
         err: str | None,
     ) -> None:
+        scroll = self._capture_form_scroll()
         self._fetching_subnets = False
         self.query_one("#fetch_subnets", Button).disabled = False
         if err:
             self.notify(f"AWS lookup failed: {err}", severity="error")
+            self._restore_form_scroll(scroll)
             return
 
         private_selected = set(self._state.get("private_subnet_ids", []))
@@ -220,16 +244,23 @@ class ExistingResourcesScreen(Screen):
         private_list = self.query_one("#private_subnet_select", SelectionList)
         private_list.clear_options()
         private_list.add_options(
-            [(label, subnet_id, subnet_id in private_selected) for label, subnet_id in private_entries]
+            [
+                (label, subnet_id, subnet_id in private_selected)
+                for label, subnet_id in private_entries
+            ]
         )
 
         public_list = self.query_one("#public_subnet_select", SelectionList)
         public_list.clear_options()
         public_list.add_options(
-            [(label, subnet_id, subnet_id in public_selected) for label, subnet_id in public_entries]
+            [
+                (label, subnet_id, subnet_id in public_selected)
+                for label, subnet_id in public_entries
+            ]
         )
 
         self.notify("Fetched subnets", severity="information")
+        self._restore_form_scroll(scroll)
 
     def _start_fetch_albs(self) -> None:
         if self._fetching_albs:
@@ -262,10 +293,12 @@ class ExistingResourcesScreen(Screen):
         entries: list[tuple[str, str, dict[str, Any]]],
         err: str | None,
     ) -> None:
+        scroll = self._capture_form_scroll()
         self._fetching_albs = False
         self.query_one("#fetch_albs", Button).disabled = False
         if err:
             self.notify(f"AWS lookup failed: {err}", severity="error")
+            self._restore_form_scroll(scroll)
             return
 
         self._albs = {arn: alb for _, arn, alb in entries}
@@ -282,6 +315,7 @@ class ExistingResourcesScreen(Screen):
                 select.value = entries[0][1]
 
         self.notify("Fetched ALBs", severity="information")
+        self._restore_form_scroll(scroll)
 
     def _start_fetch_alb_details(self) -> None:
         if self._fetching_alb_details:
@@ -301,7 +335,9 @@ class ExistingResourcesScreen(Screen):
     def _fetch_alb_details_worker(self, alb_arn: str) -> None:
         try:
             elbv2 = boto3.client("elbv2", region_name=self._aws_region())
-            listeners = elbv2.describe_listeners(LoadBalancerArn=alb_arn).get("Listeners", [])
+            listeners = elbv2.describe_listeners(LoadBalancerArn=alb_arn).get(
+                "Listeners", []
+            )
             preferred = next(
                 (
                     l
@@ -311,7 +347,9 @@ class ExistingResourcesScreen(Screen):
                 None,
             )
             if not preferred:
-                preferred = next((l for l in listeners if l.get("Port") in {80, 443}), None)
+                preferred = next(
+                    (l for l in listeners if l.get("Port") in {80, 443}), None
+                )
             if not preferred:
                 raise RuntimeError("Could not find a listener on selected ALB")
 
@@ -337,10 +375,12 @@ class ExistingResourcesScreen(Screen):
         alb_sg: str,
         err: str | None,
     ) -> None:
+        scroll = self._capture_form_scroll()
         self._fetching_alb_details = False
         self.query_one("#fetch_alb_details", Button).disabled = False
         if err:
             self.notify(f"AWS lookup failed: {err}", severity="error")
+            self._restore_form_scroll(scroll)
             return
 
         if alb_name:
@@ -348,17 +388,22 @@ class ExistingResourcesScreen(Screen):
         self.query_one("#shared_listener_arn", Input).value = listener_arn
         self.query_one("#shared_alb_sg_id", Input).value = alb_sg
         self.notify("Fetched selected ALB details", severity="information")
+        self._restore_form_scroll(scroll)
 
     def _persist_to_state(self) -> None:
         vpc_id = self.query_one("#vpc_select", Select).value
         self._state["vpc_id"] = None if self._is_select_empty(vpc_id) else str(vpc_id)
         self._state["private_subnet_ids"] = [
             str(subnet_id)
-            for subnet_id in self.query_one("#private_subnet_select", SelectionList).selected
+            for subnet_id in self.query_one(
+                "#private_subnet_select", SelectionList
+            ).selected
         ]
         self._state["public_subnet_ids"] = [
             str(subnet_id)
-            for subnet_id in self.query_one("#public_subnet_select", SelectionList).selected
+            for subnet_id in self.query_one(
+                "#public_subnet_select", SelectionList
+            ).selected
         ]
         self._state["shared_listener_arn"] = (
             self.query_one("#shared_listener_arn", Input).value.strip() or None

@@ -39,7 +39,12 @@ Parameters:
     Type: String
     Default: {{ rds.instance_type }}
 {% endif %}
-{% for secret in secrets if secret.source.value == 'env' %}
+{% if has_service_discovery %}
+  ExistingCloudMapNamespaceId:
+    Type: String
+    Default: ''
+{% endif %}
+{% for secret in secrets if secret.source.value not in ['generate', 'rds'] %}
   EnvSecretArn{{ secret.name | replace('_', '') | replace('-', '') }}:
     Type: String
 {% endfor %}
@@ -50,6 +55,10 @@ Conditions:
   HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
 {% if has_rds %}
   HasRdsSnapshot: !Not [!Equals [!Ref RdsSnapshotIdentifier, '']]
+{% endif %}
+{% if has_service_discovery %}
+  HasExistingCloudMapNamespace: !Not [!Equals [!Ref ExistingCloudMapNamespaceId, '']]
+  CreateServiceNamespace: !Equals [!Ref ExistingCloudMapNamespaceId, '']
 {% endif %}
 
 Resources:
@@ -64,6 +73,7 @@ Resources:
 {% if has_service_discovery %}
   ServiceNamespace:
     Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Condition: CreateServiceNamespace
     Properties:
       Name: local
       Vpc: !Ref VpcId
@@ -110,7 +120,7 @@ Resources:
   Secret{{ secret.name | replace('_', '') | replace('-', '') }}:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub '${ProjectName}-${EnvironmentName}-{{ secret.name.lower().replace('_', '-') }}'
+      Name: !Sub '/darth-infra/${ProjectName}/${EnvironmentName}/{{ secret.name }}'
       GenerateSecretString:
         PasswordLength: {{ secret.length }}
         ExcludePunctuation: true
@@ -118,6 +128,7 @@ Resources:
 
 {% if has_s3 %}
 {% for b in s3_buckets %}
+{% if b.mode.value != 'existing' %}
   Bucket{{ b.name | replace('-', '') }}:
     Type: AWS::S3::Bucket
     Properties:
@@ -129,11 +140,21 @@ Resources:
             AllowedMethods: [GET, PUT, POST, DELETE, HEAD]
             AllowedOrigins: ['*']
 {% endif %}
+{% endif %}
 {% endfor %}
 {% endif %}
 
 {% if has_cloudfront %}
-{% for b in s3_buckets if b.cloudfront %}
+{% for b in s3_buckets if b.cloudfront and b.mode.value != 'existing' %}
+  CloudFrontOac{{ b.name | replace('-', '') }}:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${ProjectName}-${EnvironmentName}-{{ b.name }}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
   CloudFront{{ b.name | replace('-', '') }}:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -143,6 +164,7 @@ Resources:
           - DomainName: !GetAtt Bucket{{ b.name | replace('-', '') }}.RegionalDomainName
             Id: S3{{ b.name | replace('-', '') }}Origin
             S3OriginConfig: {}
+            OriginAccessControlId: !GetAtt CloudFrontOac{{ b.name | replace('-', '') }}.Id
         DefaultCacheBehavior:
           TargetOriginId: S3{{ b.name | replace('-', '') }}Origin
           ViewerProtocolPolicy: redirect-to-https
@@ -154,10 +176,45 @@ Resources:
             Cookies:
               Forward: none
         PriceClass: PriceClass_100
+
+  BucketPolicy{{ b.name | replace('-', '') }}:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket{{ b.name | replace('-', '') }}
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${Bucket{{ b.name | replace('-', '') }}.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFront{{ b.name | replace('-', '') }}}'
 {% endfor %}
 {% endif %}
 
+{% for svc_ctx in services_ctx if not svc_ctx.svc.image %}
+  EcrRepo{{ svc_ctx.name_pascal }}:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProjectName}/${EnvironmentName}/{{ svc_ctx.name }}'
+
+{% endfor %}
+
 {% if has_rds %}
+  RdsCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-rds-credentials'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "{{ rds_master_username }}"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+
   RdsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -178,8 +235,8 @@ Resources:
       DBInstanceClass: !Ref RdsInstanceType
       Engine: postgres
       EngineVersion: '{{ rds.engine_version }}'
-      MasterUsername: '{{ rds.database_name }}'
-      ManageMasterUserPassword: true
+      MasterUsername: !Join ['', ['{{ "{{" }}resolve:secretsmanager:', !Ref RdsCredentialsSecret, ':SecretString:username{{ "}}" }}']]
+      MasterUserPassword: !Join ['', ['{{ "{{" }}resolve:secretsmanager:', !Ref RdsCredentialsSecret, ':SecretString:password{{ "}}" }}']]
       AllocatedStorage: '{{ rds.allocated_storage_gb }}'
       BackupRetentionPeriod: {{ rds.backup_retention_days }}
       DBName: !If [HasRdsSnapshot, !Ref 'AWS::NoValue', '{{ rds.database_name }}']
@@ -190,11 +247,27 @@ Resources:
       PubliclyAccessible: false
       DeletionProtection: !If [IsProd, true, false]
       StorageType: gp3
+
+  RdsSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref RdsCredentialsSecret
+      TargetId: !Ref Database
+      TargetType: AWS::RDS::DBInstance
 {% endif %}
 
 {% for svc_ctx in services_ctx %}
   Service{{ svc_ctx.name_pascal }}:
     Type: AWS::CloudFormation::Stack
+{% if svc_ctx.has_rds and not svc_ctx.svc.image %}
+    DependsOn:
+      - RdsSecretAttachment
+      - EcrRepo{{ svc_ctx.name_pascal }}
+{% elif svc_ctx.has_rds %}
+    DependsOn: RdsSecretAttachment
+{% elif not svc_ctx.svc.image %}
+    DependsOn: EcrRepo{{ svc_ctx.name_pascal }}
+{% endif %}
     Properties:
       TemplateURL: services/{{ svc_ctx.name }}.yaml
       Parameters:
@@ -207,30 +280,48 @@ Resources:
         ClusterArn: !GetAtt EcsCluster.Arn
         AlbListenerArn: !If [UseDedicatedAlb, !Ref DedicatedAlbListener, !Ref SharedAlbListenerArn]
         AlbSecurityGroupId: !If [UseDedicatedAlb, !Ref DedicatedAlbSecurityGroup, !Ref SharedAlbSecurityGroupId]
-{% if has_service_discovery and svc_ctx.svc.enable_service_discovery %}
-        CloudMapNamespaceId: !Ref ServiceNamespace
+{% if has_service_discovery and svc_ctx.svc.enable_service_discovery %}        CloudMapNamespaceId: !If [HasExistingCloudMapNamespace, !Ref ExistingCloudMapNamespaceId, !Ref ServiceNamespace]
 {% endif %}
 {% if svc_ctx.has_rds %}
-        RdsEndpoint: !GetAtt Database.Endpoint.Address
-        RdsPort: !GetAtt Database.Endpoint.Port
-        RdsDatabaseName: '{{ rds.database_name }}'
-        RdsSecretArn: !GetAtt Database.MasterUserSecret.SecretArn
+        RdsSecretArn: !Ref RdsCredentialsSecret
 {% endif %}
 {% for sec in svc_ctx.secret_params %}
 {% set sec_name = sec.secret_name %}
-{% set sec_source = (secrets | selectattr('name', 'equalto', sec_name) | list | first).source.value %}
+{% set sec_source = sec.source %}
 {% if sec_source == 'generate' %}
         {{ sec.param_name }}: !Ref Secret{{ sec_name | replace('_', '') | replace('-', '') }}
-{% else %}
+{% elif sec_source in ['env', 'existing'] %}
         {{ sec.param_name }}: !Ref EnvSecretArn{{ sec_name | replace('_', '') | replace('-', '') }}
 {% endif %}
 {% endfor %}
 {% for s3 in svc_ctx.s3_vars %}
-        {{ s3.param_name }}: !Ref Bucket{{ s3.bucket_name | replace('-', '') }}
-        {{ s3.arn_param_name }}: !GetAtt Bucket{{ s3.bucket_name | replace('-', '') }}.Arn
+{% if s3.bucket_ref %}
+        {{ s3.param_name }}: !Ref {{ s3.bucket_ref }}
+        {{ s3.arn_param_name }}: !GetAtt {{ s3.bucket_ref }}.Arn
+{% else %}
+        {{ s3.param_name }}: '{{ s3.bucket_name_literal }}'
+        {{ s3.arn_param_name }}: !Sub 'arn:aws:s3:::{{ s3.bucket_name_literal }}'
+{% endif %}
+{% if s3.cf_param_name %}
+        {{ s3.cf_param_name }}: !Sub 'https://${CloudFront{{ s3.bucket_name | replace('-', '') }}.DomainName}'
+{% endif %}
 {% endfor %}
 
 {% endfor %}
+
+{% if has_rds %}
+{% for svc_ctx in services_ctx if svc_ctx.has_rds %}
+  RdsIngressFrom{{ svc_ctx.name_pascal }}:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt Service{{ svc_ctx.name_pascal }}.Outputs.TaskSecurityGroupId
+
+{% endfor %}
+{% endif %}
 
   CustomOverrides:
     Type: AWS::CloudFormation::Stack

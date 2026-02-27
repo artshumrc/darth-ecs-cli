@@ -94,11 +94,18 @@ class ServicesScreen(Screen):
 
                     yield Label("Dockerfile path:", classes="section-label")
                     yield Input(
-                        placeholder="Dockerfile", id="svc_dockerfile", value="Dockerfile"
+                        placeholder="Dockerfile",
+                        id="svc_dockerfile",
+                        value="Dockerfile",
                     )
 
                     yield Label("Build context:", classes="section-label")
                     yield Input(placeholder=".", id="svc_context", value=".")
+
+                    yield Label(
+                        "Docker build target (optional):", classes="section-label"
+                    )
+                    yield Input(placeholder="runtime", id="svc_build_target")
 
                     yield Label(
                         "External image (leave empty to build from Dockerfile):",
@@ -123,9 +130,13 @@ class ServicesScreen(Screen):
                         id="svc_health_codes",
                         value="200-399",
                     )
-                    yield Label("Health check timeout (seconds):", classes="section-label")
+                    yield Label(
+                        "Health check timeout (seconds):", classes="section-label"
+                    )
                     yield Input(placeholder="5", id="svc_health_timeout", value="5")
-                    yield Label("Health check interval (seconds):", classes="section-label")
+                    yield Label(
+                        "Health check interval (seconds):", classes="section-label"
+                    )
                     yield Input(placeholder="30", id="svc_health_interval", value="30")
                     yield Label("Healthy threshold count:", classes="section-label")
                     yield Input(placeholder="5", id="svc_health_healthy", value="5")
@@ -180,11 +191,17 @@ class ServicesScreen(Screen):
                     yield Input(placeholder="DJANGO_SETTINGS_MODULE", id="env_var_key")
 
                     yield Label("Value:", classes="section-label")
-                    yield Input(placeholder="myapp.settings.production", id="env_var_value")
+                    yield Input(
+                        placeholder="myapp.settings.production", id="env_var_value"
+                    )
 
                     with Horizontal(classes="button-row"):
-                        yield Button("+ Add Env Var", id="env_var_add", variant="success")
-                        yield Button("Remove Env Var", id="env_var_remove", variant="error")
+                        yield Button(
+                            "+ Add Env Var", id="env_var_add", variant="success"
+                        )
+                        yield Button(
+                            "Remove Env Var", id="env_var_remove", variant="error"
+                        )
 
                 with Vertical(id="service_section_ulimits", classes="service-section"):
                     yield Static("Container Ulimits", classes="title")
@@ -201,7 +218,9 @@ class ServicesScreen(Screen):
 
                     with Horizontal(classes="button-row"):
                         yield Button("+ Add Ulimit", id="ulimit_add", variant="success")
-                        yield Button("Remove Ulimit", id="ulimit_remove", variant="error")
+                        yield Button(
+                            "Remove Ulimit", id="ulimit_remove", variant="error"
+                        )
 
                 with Vertical(id="service_section_ebs", classes="service-section"):
                     yield Static("EBS Volumes", classes="title")
@@ -264,6 +283,10 @@ class ServicesScreen(Screen):
             self.query_one("#svc_context", Input).value = str(
                 draft.get("svc_context", ".")
             )
+        if draft.get("svc_build_target") is not None:
+            self.query_one("#svc_build_target", Input).value = str(
+                draft.get("svc_build_target", "")
+            )
         if draft.get("svc_image") is not None:
             self.query_one("#svc_image", Input).value = str(draft.get("svc_image", ""))
         if draft.get("svc_port") is not None:
@@ -303,7 +326,9 @@ class ServicesScreen(Screen):
                 draft.get("svc_memory", "512")
             )
         if draft.get("svc_command") is not None:
-            self.query_one("#svc_command", Input).value = str(draft.get("svc_command", ""))
+            self.query_one("#svc_command", Input).value = str(
+                draft.get("svc_command", "")
+            )
         if draft.get("svc_discovery") is not None:
             self.query_one("#svc_discovery", Checkbox).value = bool(
                 draft.get("svc_discovery", False)
@@ -340,13 +365,20 @@ class ServicesScreen(Screen):
                 "svc_name": self.query_one("#svc_name", Input).value,
                 "svc_dockerfile": self.query_one("#svc_dockerfile", Input).value,
                 "svc_context": self.query_one("#svc_context", Input).value,
+                "svc_build_target": self.query_one("#svc_build_target", Input).value,
                 "svc_image": self.query_one("#svc_image", Input).value,
                 "svc_port": self.query_one("#svc_port", Input).value,
                 "svc_health": self.query_one("#svc_health", Input).value,
                 "svc_health_codes": self.query_one("#svc_health_codes", Input).value,
-                "svc_health_timeout": self.query_one("#svc_health_timeout", Input).value,
-                "svc_health_interval": self.query_one("#svc_health_interval", Input).value,
-                "svc_health_healthy": self.query_one("#svc_health_healthy", Input).value,
+                "svc_health_timeout": self.query_one(
+                    "#svc_health_timeout", Input
+                ).value,
+                "svc_health_interval": self.query_one(
+                    "#svc_health_interval", Input
+                ).value,
+                "svc_health_healthy": self.query_one(
+                    "#svc_health_healthy", Input
+                ).value,
                 "svc_health_unhealthy": self.query_one(
                     "#svc_health_unhealthy", Input
                 ).value,
@@ -501,7 +533,11 @@ class ServicesScreen(Screen):
     def _persist_alb_to_state(self) -> None:
         alb_set = self.query_one("#alb_mode", RadioSet)
         alb_pressed = alb_set.pressed_button
-        mode = "dedicated" if alb_pressed and alb_pressed.id == "alb_mode_dedicated" else "shared"
+        mode = (
+            "dedicated"
+            if alb_pressed and alb_pressed.id == "alb_mode_dedicated"
+            else "shared"
+        )
         self._state["alb_mode"] = mode
         self._state["shared_alb_name"] = self.query_one(
             "#shared_alb_name", Input
@@ -515,7 +551,9 @@ class ServicesScreen(Screen):
         self._state["certificate_arn"] = (
             self.query_one("#cert_arn", Input).value.strip() or None
         )
-        self._state["alb_domain"] = self.query_one("#alb_domain", Input).value.strip() or None
+        self._state["alb_domain"] = (
+            self.query_one("#alb_domain", Input).value.strip() or None
+        )
         default_target = self.query_one("#default_target_service", Select).value
         self._state["default_target_service"] = (
             str(default_target).strip()
@@ -538,9 +576,13 @@ class ServicesScreen(Screen):
             return
 
         self._active_section = section
-        self.query_one("#service_section_details", Vertical).display = section == "details"
+        self.query_one("#service_section_details", Vertical).display = (
+            section == "details"
+        )
         self.query_one("#service_section_env", Vertical).display = section == "env"
-        self.query_one("#service_section_ulimits", Vertical).display = section == "ulimits"
+        self.query_one("#service_section_ulimits", Vertical).display = (
+            section == "ulimits"
+        )
         self.query_one("#service_section_ebs", Vertical).display = section == "ebs"
 
         self.query_one("#service_tab_details", Button).variant = (
@@ -629,6 +671,9 @@ class ServicesScreen(Screen):
                 "dockerfile", "Dockerfile"
             )
             self.query_one("#svc_context", Input).value = svc.get("build_context", ".")
+            self.query_one("#svc_build_target", Input).value = (
+                svc.get("docker_build_target") or ""
+            )
             self.query_one("#svc_port", Input).value = (
                 str(svc["port"]) if svc.get("port") else ""
             )
@@ -749,16 +794,35 @@ class ServicesScreen(Screen):
             if not self._save_service():
                 return False
         elif name:
-            if not self._add_service():
-                return False
+            existing_index = next(
+                (
+                    i
+                    for i, svc in enumerate(self._state.get("services", []))
+                    if str(svc.get("name", "")).strip() == name
+                ),
+                None,
+            )
+            if existing_index is not None:
+                self._editing_index = int(existing_index)
+                if not self._save_service():
+                    return False
+            else:
+                if not self._add_service():
+                    return False
         if require_non_empty and not self._state.get("services"):
             self.notify("Add at least one service", severity="error")
             return False
         return True
 
+    def _persist_for_navigation(self) -> None:
+        """Compatibility hook used by app-level quit/export persistence."""
+        self._persist_services_for_navigation(require_non_empty=False)
+
     def before_step_navigation(self, target: str) -> bool:
         require_non_empty = target not in {"welcome", "existing-resources"}
-        return self._persist_services_for_navigation(require_non_empty=require_non_empty)
+        return self._persist_services_for_navigation(
+            require_non_empty=require_non_empty
+        )
 
     def _start_alb_fetch(self) -> None:
         if self._alb_fetch_inflight:
@@ -799,7 +863,8 @@ class ServicesScreen(Screen):
                 (
                     listener
                     for listener in listeners
-                    if listener.get("Protocol") == "HTTPS" and listener.get("Port") == 443
+                    if listener.get("Protocol") == "HTTPS"
+                    and listener.get("Port") == 443
                 ),
                 None,
             )
@@ -1002,7 +1067,9 @@ class ServicesScreen(Screen):
         name = self.query_one("#path_rule_name", Input).value.strip()
         path_pattern = self.query_one("#path_rule_pattern", Input).value.strip()
         target_raw = self.query_one("#path_rule_target_service", Select).value
-        target = str(target_raw).strip() if not self._is_select_empty(target_raw) else ""
+        target = (
+            str(target_raw).strip() if not self._is_select_empty(target_raw) else ""
+        )
         priority_raw = self.query_one("#path_rule_priority", Input).value.strip()
 
         if not name or not path_pattern or not target or not priority_raw:
@@ -1078,7 +1145,9 @@ class ServicesScreen(Screen):
         used = self._used_listener_priorities()
         aws_region = str(self._state.get("aws_region", "us-east-1"))
         mode = str(self._state.get("alb_mode", "shared"))
-        shared_listener_arn = self.query_one("#shared_listener_arn", Input).value.strip()
+        shared_listener_arn = self.query_one(
+            "#shared_listener_arn", Input
+        ).value.strip()
         shared_alb_name = self.query_one("#shared_alb_name", Input).value.strip()
 
         self._priority_fetch_inflight = True
@@ -1225,28 +1294,34 @@ class ServicesScreen(Screen):
             health_check_interval_seconds = int(interval_str) if interval_str else 30
             healthy_threshold_count = int(healthy_str) if healthy_str else 5
             unhealthy_threshold_count = int(unhealthy_str) if unhealthy_str else 2
-            health_check_grace_period_seconds = (
-                int(grace_str) if grace_str else None
-            )
+            health_check_grace_period_seconds = int(grace_str) if grace_str else None
         except ValueError:
             self.notify("Health check timing values must be integers", severity="error")
             return None
         if not (2 <= health_check_timeout_seconds <= 120):
-            self.notify("Health check timeout must be between 2 and 120", severity="error")
+            self.notify(
+                "Health check timeout must be between 2 and 120", severity="error"
+            )
             return None
         if not (5 <= health_check_interval_seconds <= 300):
-            self.notify("Health check interval must be between 5 and 300", severity="error")
+            self.notify(
+                "Health check interval must be between 5 and 300", severity="error"
+            )
             return None
         if not (2 <= healthy_threshold_count <= 10):
             self.notify("Healthy threshold must be between 2 and 10", severity="error")
             return None
         if not (2 <= unhealthy_threshold_count <= 10):
-            self.notify("Unhealthy threshold must be between 2 and 10", severity="error")
+            self.notify(
+                "Unhealthy threshold must be between 2 and 10", severity="error"
+            )
             return None
         if health_check_grace_period_seconds is not None and not (
             0 <= health_check_grace_period_seconds <= 7200
         ):
-            self.notify("Health check grace must be between 0 and 7200", severity="error")
+            self.notify(
+                "Health check grace must be between 0 and 7200", severity="error"
+            )
             return None
 
         # Launch type
@@ -1282,6 +1357,9 @@ class ServicesScreen(Screen):
             "dockerfile": self.query_one("#svc_dockerfile", Input).value.strip()
             or "Dockerfile",
             "build_context": self.query_one("#svc_context", Input).value.strip() or ".",
+            "docker_build_target": (
+                self.query_one("#svc_build_target", Input).value.strip() or None
+            ),
             "image": image,
             "port": port,
             "health_check_path": self.query_one("#svc_health", Input).value.strip()
@@ -1347,6 +1425,7 @@ class ServicesScreen(Screen):
         self.query_one("#svc_name", Input).value = ""
         self.query_one("#svc_dockerfile", Input).value = "Dockerfile"
         self.query_one("#svc_context", Input).value = "."
+        self.query_one("#svc_build_target", Input).value = ""
         self.query_one("#svc_port", Input).value = "8000"
         self.query_one("#svc_health", Input).value = "/health"
         self.query_one("#svc_health_codes", Input).value = "200-399"

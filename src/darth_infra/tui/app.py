@@ -45,6 +45,19 @@ class DarthEcsInitApp(App[None]):
         height: 6;
         min-height: 6;
     }
+    #conn-list {
+        height: 7;
+        min-height: 7;
+    }
+    #sec_existing_list,
+    #sec_existing_selection {
+        height: 10;
+        min-height: 10;
+    }
+    .section-divider {
+        color: $text-muted;
+        margin: 1 0;
+    }
     .form-container {
         width: 80;
         max-height: 100%;
@@ -240,7 +253,11 @@ class DarthEcsInitApp(App[None]):
             return
         current_screen = self.screen
         # Best-effort flush of in-progress widget state into app state before export.
-        for hook_name in ("_capture_draft", "_persist_to_state", "_persist_for_navigation"):
+        for hook_name in (
+            "_capture_draft",
+            "_persist_to_state",
+            "_persist_for_navigation",
+        ):
             hook = getattr(current_screen, hook_name, None)
             if callable(hook):
                 try:

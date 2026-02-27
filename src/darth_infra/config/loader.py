@@ -22,6 +22,8 @@ from .models import (
     ProjectConfig,
     RdsConfig,
     S3BucketConfig,
+    S3BucketConnection,
+    S3BucketMode,
     SecretConfig,
     SecretSource,
     ServiceConfig,
@@ -143,6 +145,7 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
         name=raw["name"],
         dockerfile=raw.get("dockerfile", "Dockerfile"),
         build_context=raw.get("build_context", "."),
+        docker_build_target=raw.get("docker_build_target"),
         image=raw.get("image"),
         port=port,
         health_check_path=raw.get("health_check_path", "/health"),
@@ -174,7 +177,7 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
 def _parse_rds(raw: dict[str, Any]) -> RdsConfig:
     return RdsConfig(
         database_name=raw.get("database_name", "app"),
-        instance_type=raw.get("instance_type", "t4g.micro"),
+        instance_type=raw.get("instance_type", "db.t4g.micro"),
         allocated_storage_gb=raw.get("allocated_storage_gb", 20),
         expose_to=raw.get("expose_to", []),
         engine_version=raw.get("engine_version", "15"),
@@ -183,11 +186,25 @@ def _parse_rds(raw: dict[str, Any]) -> RdsConfig:
 
 
 def _parse_s3(raw: dict[str, Any]) -> S3BucketConfig:
+    connections = [
+        S3BucketConnection(
+            service=c["service"],
+            env_key=c["env_key"],
+            cloudfront_env_key=c.get("cloudfront_env_key"),
+            read_only=c.get("read_only", False),
+        )
+        for c in raw.get("connections", [])
+    ]
     return S3BucketConfig(
         name=raw["name"],
+        mode=S3BucketMode(raw.get("mode", "managed")),
+        existing_bucket_name=raw.get("existing_bucket_name"),
+        seed_source_bucket_name=raw.get("seed_source_bucket_name"),
+        seed_non_prod_only=raw.get("seed_non_prod_only", True),
         public_read=raw.get("public_read", False),
         cloudfront=raw.get("cloudfront", False),
         cors=raw.get("cors", False),
+        connections=connections,
     )
 
 
@@ -219,6 +236,7 @@ def _parse_secret(raw: dict[str, Any]) -> SecretConfig:
     return SecretConfig(
         name=raw["name"],
         source=SecretSource(source_str),
+        existing_secret_name=raw.get("existing_secret_name"),
         length=raw.get("length", 50),
         generate_once=raw.get("generate_once", True),
     )
@@ -270,6 +288,8 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f'name = "{svc.name}"')
         lines.append(f'dockerfile = "{svc.dockerfile}"')
         lines.append(f'build_context = "{svc.build_context}"')
+        if svc.docker_build_target:
+            lines.append(f'docker_build_target = "{svc.docker_build_target}"')
         if svc.image:
             lines.append(f'image = "{svc.image}"')
         if svc.port is not None:
@@ -278,8 +298,12 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append("# port omitted for worker service")
         lines.append(f'health_check_path = "{svc.health_check_path}"')
         lines.append(f'health_check_http_codes = "{svc.health_check_http_codes}"')
-        lines.append(f"health_check_timeout_seconds = {svc.health_check_timeout_seconds}")
-        lines.append(f"health_check_interval_seconds = {svc.health_check_interval_seconds}")
+        lines.append(
+            f"health_check_timeout_seconds = {svc.health_check_timeout_seconds}"
+        )
+        lines.append(
+            f"health_check_interval_seconds = {svc.health_check_interval_seconds}"
+        )
         lines.append(f"healthy_threshold_count = {svc.healthy_threshold_count}")
         lines.append(f"unhealthy_threshold_count = {svc.unhealthy_threshold_count}")
         if svc.health_check_grace_period_seconds is not None:
@@ -305,9 +329,6 @@ def dump_config(config: ProjectConfig) -> str:
         if svc.secrets:
             sec_list = ", ".join(f'"{s}"' for s in svc.secrets)
             lines.append(f"secrets = [{sec_list}]")
-        if svc.s3_access:
-            s3_list = ", ".join(f'"{s}"' for s in svc.s3_access)
-            lines.append(f"s3_access = [{s3_list}]")
         if svc.environment_variables:
             env_inline = ", ".join(
                 f'"{k}" = "{_toml_escape(v)}"'
@@ -352,9 +373,25 @@ def dump_config(config: ProjectConfig) -> str:
     for bucket in config.s3_buckets:
         lines.append("[[s3_buckets]]")
         lines.append(f'name = "{bucket.name}"')
+        lines.append(f'mode = "{_enum_value(bucket.mode)}"')
+        if bucket.existing_bucket_name:
+            lines.append(f'existing_bucket_name = "{bucket.existing_bucket_name}"')
+        if bucket.seed_source_bucket_name:
+            lines.append(
+                f'seed_source_bucket_name = "{bucket.seed_source_bucket_name}"'
+            )
+        lines.append(f"seed_non_prod_only = {str(bucket.seed_non_prod_only).lower()}")
         lines.append(f"public_read = {str(bucket.public_read).lower()}")
         lines.append(f"cloudfront = {str(bucket.cloudfront).lower()}")
         lines.append(f"cors = {str(bucket.cors).lower()}")
+        for conn in bucket.connections:
+            lines.append("")
+            lines.append("[[s3_buckets.connections]]")
+            lines.append(f'service = "{conn.service}"')
+            lines.append(f'env_key = "{conn.env_key}"')
+            if conn.cloudfront_env_key:
+                lines.append(f'cloudfront_env_key = "{conn.cloudfront_env_key}"')
+            lines.append(f"read_only = {str(conn.read_only).lower()}")
         lines.append("")
 
     lines.append("# [deploy-live] ALB lookup/attachment behavior")
@@ -374,7 +411,9 @@ def dump_config(config: ProjectConfig) -> str:
     if config.alb.default_target_service:
         lines.append(f'default_target_service = "{config.alb.default_target_service}"')
     if config.alb.default_listener_priority is not None:
-        lines.append(f"default_listener_priority = {config.alb.default_listener_priority}")
+        lines.append(
+            f"default_listener_priority = {config.alb.default_listener_priority}"
+        )
     for rule in config.alb.path_rules:
         lines.append("")
         lines.append("[[alb.path_rules]]")
@@ -390,6 +429,10 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append("[[secrets]]")
         lines.append(f'name = "{secret.name}"')
         lines.append(f'source = "{_enum_value(secret.source)}"')
+        if secret.existing_secret_name:
+            lines.append(
+                f'existing_secret_name = "{_toml_escape(secret.existing_secret_name)}"'
+            )
         lines.append(f"length = {secret.length}")
         lines.append(f"generate_once = {str(secret.generate_once).lower()}")
         lines.append("")

@@ -93,9 +93,15 @@
             "description": "Docker build context path, relative to project root.",
             "default": "."
           },
+          "docker_build_target": {
+            "type": ["string", "null"],
+            "description": "Optional Dockerfile build target stage (docker build --target).",
+            "default": null,
+            "examples": ["runtime", "worker"]
+          },
           "image": {
             "type": ["string", "null"],
-            "description": "External container image URI (e.g. \"docker.elastic.co/elasticsearch/elasticsearch:8.12.0\"). When set, ECR repo creation and Docker build/push are skipped.",
+            "description": "External container image URI (e.g. \"docker.elastic.co/elasticsearch/elasticsearch:8.12.0\"). When set, Docker build/push is skipped and no ECR repository is provisioned for this service.",
             "default": null,
             "examples": ["docker.elastic.co/elasticsearch/elasticsearch:8.12.0", "redis:7-alpine"]
           },
@@ -321,8 +327,8 @@
         "instance_type": {
           "type": "string",
           "description": "EC2 instance type string.",
-          "default": "t4g.micro",
-          "examples": ["t4g.micro", "t4g.small", "t4g.medium"]
+          "default": "db.t4g.micro",
+          "examples": ["db.t4g.micro", "db.t4g.small", "db.t4g.medium"]
         },
         "allocated_storage_gb": {
           "type": "integer",
@@ -364,6 +370,27 @@
             "type": "string",
             "description": "Logical bucket name. Actual bucket will be named \"{project}-{env}-{name}\"."
           },
+          "mode": {
+            "type": "string",
+            "description": "Bucket source mode. managed creates per-env buckets, existing reuses an existing bucket, seed-copy creates a managed bucket and seeds it from a source bucket.",
+            "enum": ["managed", "existing", "seed-copy"],
+            "default": "managed"
+          },
+          "existing_bucket_name": {
+            "type": ["string", "null"],
+            "description": "Existing bucket name to use when mode is \"existing\".",
+            "default": null
+          },
+          "seed_source_bucket_name": {
+            "type": ["string", "null"],
+            "description": "Source bucket name for one-time seed copy when mode is \"seed-copy\".",
+            "default": null
+          },
+          "seed_non_prod_only": {
+            "type": "boolean",
+            "description": "When true, one-time seed copy runs only for non-prod environments.",
+            "default": true
+          },
           "public_read": {
             "type": "boolean",
             "description": "Grant public read access.",
@@ -378,6 +405,38 @@
             "type": "boolean",
             "description": "Enable permissive CORS headers.",
             "default": false
+          },
+          "connections": {
+            "type": "array",
+            "description": "Service connections for this bucket.",
+            "items": {
+              "type": "object",
+              "required": ["service", "env_key"],
+              "additionalProperties": false,
+              "properties": {
+                "service": {
+                  "type": "string",
+                  "description": "Service name to grant bucket access."
+                },
+                "env_key": {
+                  "type": "string",
+                  "description": "Environment variable name for the bucket name (e.g. \"MEDIA_BUCKET\").",
+                  "pattern": "^[A-Z][A-Z0-9_]*$"
+                },
+                "cloudfront_env_key": {
+                  "type": ["string", "null"],
+                  "description": "Environment variable name for the CloudFront URL (optional, requires cloudfront=true).",
+                  "pattern": "^[A-Z][A-Z0-9_]*$",
+                  "default": null
+                },
+                "read_only": {
+                  "type": "boolean",
+                  "description": "If true, grant read-only (s3:GetObject, s3:ListBucket) access; otherwise read/write.",
+                  "default": false
+                }
+              }
+            },
+            "default": []
           }
         }
       },
@@ -480,9 +539,14 @@
           },
           "source": {
             "type": "string",
-            "description": "\"generate\" to auto-create a random value per environment. \"env\" to import an existing Secrets Manager secret name/ARN from the deployer's local environment variable.",
-            "enum": ["generate", "env"],
+            "description": "\"generate\" to auto-create a random value per environment. \"env\" to import an existing Secrets Manager secret name/ARN from the deployer's local environment variable. \"existing\" to reference an existing Secrets Manager secret by name/ARN from config.",
+            "enum": ["generate", "env", "existing", "rds"],
             "default": "generate"
+          },
+          "existing_secret_name": {
+            "type": ["string", "null"],
+            "description": "Existing Secrets Manager secret name or ARN (required when source is \"existing\"); for source \"rds\", this is the JSON key (e.g. host, port, dbname, username, password).",
+            "default": null
           },
           "length": {
             "type": "integer",

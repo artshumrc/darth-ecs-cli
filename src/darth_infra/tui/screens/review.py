@@ -19,6 +19,8 @@ from ...config.models import (
     ProjectConfig,
     RdsConfig,
     S3BucketConfig,
+    S3BucketConnection,
+    S3BucketMode,
     SecretConfig,
     SecretSource,
     ServiceConfig,
@@ -124,14 +126,43 @@ class ReviewScreen(Screen):
                 if b.get("public_read"):
                     flags.append("public")
                 flag_str = f" [{', '.join(flags)}]" if flags else ""
-                lines.append(f"  • {b['name']}{flag_str}")
+                mode = b.get("mode", "managed")
+                lines.append(f"  • {b['name']} ({mode}){flag_str}")
+                if mode == "existing":
+                    lines.append(
+                        f"      existing: {b.get('existing_bucket_name') or '(missing)'}"
+                    )
+                if mode == "seed-copy":
+                    lines.append(
+                        f"      seed source: {b.get('seed_source_bucket_name') or '(missing)'}"
+                    )
+                    lines.append(
+                        "      seed scope: "
+                        + (
+                            "non-prod only"
+                            if b.get("seed_non_prod_only", True)
+                            else "all environments"
+                        )
+                    )
+                for conn in b.get("connections", []):
+                    access = "read-only" if conn.get("read_only") else "R/W"
+                    conn_services = conn.get("services")
+                    if isinstance(conn_services, list) and conn_services:
+                        service_label = ", ".join(
+                            str(service) for service in conn_services
+                        )
+                    else:
+                        service_label = str(conn.get("service", "")).strip()
+                    lines.append(
+                        f"      → {service_label} as {conn['env_key']} [{access}]"
+                    )
+                    if conn.get("cloudfront_env_key"):
+                        lines.append(f"        CF URL → {conn['cloudfront_env_key']}")
 
         lines.append("")
         lines.append(f"[bold]ALB:[/bold] {s.get('alb_mode', 'shared')}")
         lines.append(f"  Cluster domain: {s.get('alb_domain') or '(none)'}")
-        lines.append(
-            f"  Default target: {s.get('default_target_service') or '(none)'}"
-        )
+        lines.append(f"  Default target: {s.get('default_target_service') or '(none)'}")
         lines.append(
             f"  Default priority: {s.get('default_listener_priority') or '(none)'}"
         )
@@ -143,12 +174,8 @@ class ReviewScreen(Screen):
                     f"{rule.get('target_service')} ({rule.get('priority')})"
                 )
         if s.get("alb_mode", "shared") == "shared":
-            lines.append(
-                f"  Name: {s.get('shared_alb_name') or '(auto)'}"
-            )
-            lines.append(
-                f"  Listener: {s.get('shared_listener_arn') or '(auto)'}"
-            )
+            lines.append(f"  Name: {s.get('shared_alb_name') or '(auto)'}")
+            lines.append(f"  Listener: {s.get('shared_listener_arn') or '(auto)'}")
             lines.append(
                 f"  ALB SG: {s.get('shared_alb_security_group_id') or '(auto)'}"
             )
@@ -168,7 +195,9 @@ class ReviewScreen(Screen):
         service_names = [svc["name"] for svc in self._state.get("services", [])]
         out: dict[str, list[str]] = {
             name: [str(sec) for sec in svc.get("secrets", [])]
-            for name, svc in ((svc["name"], svc) for svc in self._state.get("services", []))
+            for name, svc in (
+                (svc["name"], svc) for svc in self._state.get("services", [])
+            )
         }
 
         for sec in self._state.get("secrets", []):
@@ -203,15 +232,12 @@ class ReviewScreen(Screen):
                 name=svc["name"],
                 dockerfile=svc.get("dockerfile", "Dockerfile"),
                 build_context=svc.get("build_context", "."),
+                docker_build_target=svc.get("docker_build_target"),
                 image=svc.get("image"),
                 port=svc.get("port"),
                 health_check_path=svc.get("health_check_path", "/health"),
-                health_check_http_codes=svc.get(
-                    "health_check_http_codes", "200-399"
-                ),
-                health_check_timeout_seconds=svc.get(
-                    "health_check_timeout_seconds", 5
-                ),
+                health_check_http_codes=svc.get("health_check_http_codes", "200-399"),
+                health_check_timeout_seconds=svc.get("health_check_timeout_seconds", 5),
                 health_check_interval_seconds=svc.get(
                     "health_check_interval_seconds", 30
                 ),
@@ -258,25 +284,51 @@ class ReviewScreen(Screen):
             r = s["rds"]
             rds = RdsConfig(
                 database_name=r["database_name"],
-                instance_type=r.get("instance_type", "t4g.micro"),
+                instance_type=r.get("instance_type", "db.t4g.micro"),
                 allocated_storage_gb=r.get("allocated_storage_gb", 20),
                 expose_to=r.get("expose_to", []),
             )
 
-        s3_buckets = [
-            S3BucketConfig(
-                name=b["name"],
-                public_read=b.get("public_read", False),
-                cloudfront=b.get("cloudfront", False),
-                cors=b.get("cors", False),
+        s3_buckets = []
+        for b in s.get("s3_buckets", []):
+            flat_connections: list[S3BucketConnection] = []
+            for conn in b.get("connections", []):
+                conn_services = conn.get("services")
+                if isinstance(conn_services, list) and conn_services:
+                    connection_services = [str(service) for service in conn_services]
+                else:
+                    service_name = str(conn.get("service", "")).strip()
+                    connection_services = [service_name] if service_name else []
+
+                for service_name in connection_services:
+                    flat_connections.append(
+                        S3BucketConnection(
+                            service=service_name,
+                            env_key=conn["env_key"],
+                            cloudfront_env_key=conn.get("cloudfront_env_key"),
+                            read_only=conn.get("read_only", False),
+                        )
+                    )
+
+            s3_buckets.append(
+                S3BucketConfig(
+                    name=b["name"],
+                    mode=S3BucketMode(b.get("mode", "managed")),
+                    existing_bucket_name=b.get("existing_bucket_name"),
+                    seed_source_bucket_name=b.get("seed_source_bucket_name"),
+                    seed_non_prod_only=b.get("seed_non_prod_only", True),
+                    public_read=b.get("public_read", False),
+                    cloudfront=b.get("cloudfront", False),
+                    cors=b.get("cors", False),
+                    connections=flat_connections,
+                )
             )
-            for b in s.get("s3_buckets", [])
-        ]
 
         secrets = [
             SecretConfig(
                 name=sec["name"],
                 source=SecretSource(sec.get("source", "generate")),
+                existing_secret_name=sec.get("existing_secret_name"),
                 length=sec.get("length", 50),
                 generate_once=sec.get("generate_once", True),
             )

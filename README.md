@@ -8,6 +8,12 @@ A CLI tool for deploying websites to AWS ECS with multi-environment support.
 uv tool install .
 ```
 
+## Docker Build Prerequisite
+
+`darth-infra build` uses Docker BuildKit via `docker buildx`. If `buildx` is not available, install/enable it:
+
+https://docs.docker.com/go/buildx/
+
 ## Quick Start
 
 ```bash
@@ -20,6 +26,9 @@ darth-infra init --seed wizard-export.json
 # Deploy production
 darth-infra deploy --env prod
 
+# Cancel an in-flight deploy/update
+darth-infra deploy --env prod --cancel
+
 # Regenerate CloudFormation templates from darth-infra.toml (no deploy)
 darth-infra render
 
@@ -29,6 +38,9 @@ darth-infra deploy --env feature-xyz
 # Build & push Docker images
 darth-infra build
 darth-infra push --env prod
+
+# Deploy and include build/push in one flow
+darth-infra deploy --env prod --with-images
 
 # Operations
 darth-infra logs django --env prod -f
@@ -52,6 +64,12 @@ darth-infra destroy --env dev
 
 3. **`darth-infra deploy --env <name>`** deploys via CloudFormation change sets. Prod must be deployed first.
 
+  If you need to stop an in-progress update, run:
+  `darth-infra deploy --env <name> --cancel`
+
+  Use **`--with-images`** to include Docker build/push before the deploy. For first-time environments,
+  `darth-infra` runs a bootstrap pass to provision ECR repositories before image push.
+
 4. Adding a new environment is as simple as editing `darth-infra.toml`:
    ```toml
    [project]
@@ -61,7 +79,10 @@ darth-infra destroy --env dev
 
 5. Non-prod environments automatically:
    - Clone RDS from the latest prod snapshot
-   - Create fresh S3 buckets with the same config
+   - Apply S3 behavior per bucket mode:
+     - `managed`: create fresh env bucket (`{project}-{env}-{name}`)
+     - `existing`: reuse a pre-existing bucket
+     - `seed-copy`: create fresh env bucket and run one-time seed copy from source
    - Generate new secrets
    - Get environment-prefixed subdomains (e.g., `dev.myapp.example.com`)
 
@@ -89,11 +110,14 @@ s3_access = ["media"]
 
 [rds]
 database_name = "myapp"
-instance_type = "t4g.micro"
+instance_type = "db.t4g.micro"
 expose_to = ["django"]
 
 [[s3_buckets]]
 name = "media"
+mode = "seed-copy"
+seed_source_bucket_name = "legacy-media-bucket"
+seed_non_prod_only = true
 cloudfront = true
 
 [alb]
@@ -106,6 +130,10 @@ default_listener_priority = 100
 name = "DJANGO_SECRET_KEY"
 source = "generate"
 ```
+
+Generated secrets are named using:
+
+`/darth-infra/<project name>/<env>/<secret name>`
 
 ## Architecture
 

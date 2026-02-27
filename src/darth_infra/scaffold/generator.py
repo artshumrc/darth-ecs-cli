@@ -22,7 +22,9 @@ def _enum_value(value: object) -> str:
     return getattr(value, "value", str(value))
 
 
-def _resolve_user_data_script_content(inline: str | None, path: str | None) -> str | None:
+def _resolve_user_data_script_content(
+    inline: str | None, path: str | None
+) -> str | None:
     content = (inline or "").strip()
     if not content and path:
         src_script = Path.cwd() / path
@@ -32,6 +34,20 @@ def _resolve_user_data_script_content(inline: str | None, path: str | None) -> s
         return None
     # Escape Fn::Sub interpolation markers from user-provided script content.
     return content.replace("${", "$${")
+
+
+def _derive_rds_master_username(database_name: str) -> str:
+    """Derive a safe RDS master username from database name.
+
+    RDS DB master usernames must start with a letter and contain only
+    alphanumeric characters, with max length 16.
+    """
+    normalized = re.sub(r"[^A-Za-z0-9]", "", database_name)
+    if not normalized:
+        normalized = "appuser"
+    if not normalized[0].isalpha():
+        normalized = f"u{normalized}"
+    return normalized[:16].lower()
 
 
 def generate_project(config: ProjectConfig, output_dir: Path) -> Path:
@@ -108,11 +124,134 @@ def generate_project(config: ProjectConfig, output_dir: Path) -> Path:
 def _build_context(config: ProjectConfig) -> dict:
     services_ctx: list[dict[str, object]] = []
     alb_target_services: dict[str, dict[str, str]] = {}
+    routed_alb_target_services: set[str] = set()
+    if config.alb.domain:
+        if config.alb.default_target_service:
+            routed_alb_target_services.add(config.alb.default_target_service)
+        for rule in config.alb.path_rules:
+            routed_alb_target_services.add(rule.target_service)
     rds_expose_to = set(config.rds.expose_to if config.rds else [])
+    rds_secret_key_by_env = {
+        "DATABASE_HOST": "host",
+        "DATABASE_PORT": "port",
+        "DATABASE_DB": "dbname",
+        "DATABASE_USER": "username",
+        "DATABASE_PASSWORD": "password",
+        "POSTGRES_HOST": "host",
+        "POSTGRES_PORT": "port",
+        "POSTGRES_DB": "dbname",
+        "POSTGRES_USER": "username",
+        "POSTGRES_PASSWORD": "password",
+    }
+    required_postgres_secret_names = (
+        "POSTGRES_DB",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+    )
+    secrets_by_name = {sec.name: sec for sec in config.secrets}
+
+    s3_access_by_service: dict[str, list[dict]] = {}
+    seen_s3_entries_by_service: dict[str, set[tuple[str, str, str | None, bool]]] = {}
+    for bucket in config.s3_buckets:
+        bucket_ref = (
+            f"Bucket{bucket.name.replace('-', '')}"
+            if bucket.mode.value != "existing"
+            else None
+        )
+        bucket_name_literal = (
+            bucket.existing_bucket_name if bucket.mode.value == "existing" else None
+        )
+        for conn in bucket.connections:
+            dedupe_key = (
+                bucket.name,
+                conn.env_key,
+                conn.cloudfront_env_key,
+                conn.read_only,
+            )
+            seen_for_service = seen_s3_entries_by_service.setdefault(
+                conn.service, set()
+            )
+            if dedupe_key in seen_for_service:
+                continue
+            seen_for_service.add(dedupe_key)
+            s3_access_by_service.setdefault(conn.service, []).append(
+                {
+                    "bucket_name": bucket.name,
+                    "bucket_ref": bucket_ref,
+                    "bucket_name_literal": bucket_name_literal,
+                    "env_key": conn.env_key,
+                    "param_name": f"BucketName{_pascalize(bucket.name)}",
+                    "arn_param_name": f"BucketArn{_pascalize(bucket.name)}",
+                    "cf_param_name": f"CloudFrontUrl{_pascalize(bucket.name)}"
+                    if (
+                        bucket.cloudfront
+                        and conn.cloudfront_env_key
+                        and bucket.mode.value != "existing"
+                    )
+                    else None,
+                    "cloudfront_env_key": conn.cloudfront_env_key
+                    if bucket.cloudfront
+                    else None,
+                    "read_only": conn.read_only,
+                }
+            )
+
+    for service_name, entries in s3_access_by_service.items():
+        s3_access_by_service[service_name] = sorted(
+            entries,
+            key=lambda item: (
+                str(item["bucket_name"]),
+                str(item["env_key"]),
+                str(item.get("cloudfront_env_key") or ""),
+            ),
+        )
 
     for svc in config.services:
-        has_alb_target = svc.port is not None
+        has_alb_target = svc.port is not None and svc.name in routed_alb_target_services
         name_pascal = _pascalize(svc.name)
+        secret_params: list[dict[str, object]] = []
+        service_has_rds_secret = False
+        for sec_name in svc.secrets:
+            secret_cfg = secrets_by_name.get(sec_name)
+            source = _enum_value(secret_cfg.source) if secret_cfg else "generate"
+            rds_key = None
+            if source == "rds":
+                rds_key = (
+                    str(secret_cfg.existing_secret_name).strip()
+                    if secret_cfg and secret_cfg.existing_secret_name
+                    else rds_secret_key_by_env.get(sec_name)
+                )
+            if source == "rds":
+                service_has_rds_secret = True
+            secret_params.append(
+                {
+                    "secret_name": sec_name,
+                    "param_name": f"SecretArn{_pascalize(sec_name)}",
+                    "source": source,
+                    "requires_param": source != "rds",
+                    "rds_json_key": rds_key,
+                }
+            )
+
+        if config.rds and svc.name in rds_expose_to:
+            present_secret_names = {
+                str(param["secret_name"]) for param in secret_params
+            }
+            for sec_name in required_postgres_secret_names:
+                if sec_name in present_secret_names:
+                    continue
+                secret_params.append(
+                    {
+                        "secret_name": sec_name,
+                        "param_name": f"SecretArn{_pascalize(sec_name)}",
+                        "source": "rds",
+                        "requires_param": False,
+                        "rds_json_key": rds_secret_key_by_env[sec_name],
+                    }
+                )
+
         if has_alb_target:
             alb_target_services[svc.name] = {
                 "stack_logical_id": f"Service{name_pascal}",
@@ -132,23 +271,10 @@ def _build_context(config: ProjectConfig) -> dict:
                     svc.user_data_script_content,
                     svc.user_data_script,
                 ),
-                "has_rds": svc.name in rds_expose_to,
-                "s3_vars": [
-                    {
-                        "bucket_name": b,
-                        "env_key": f"S3_BUCKET_{b.upper().replace('-', '_')}",
-                        "param_name": f"BucketName{_pascalize(b)}",
-                        "arn_param_name": f"BucketArn{_pascalize(b)}",
-                    }
-                    for b in svc.s3_access
-                ],
-                "secret_params": [
-                    {
-                        "secret_name": sec,
-                        "param_name": f"SecretArn{_pascalize(sec)}",
-                    }
-                    for sec in svc.secrets
-                ],
+                "has_rds": bool(config.rds)
+                and (svc.name in rds_expose_to or service_has_rds_secret),
+                "s3_vars": s3_access_by_service.get(svc.name, []),
+                "secret_params": secret_params,
                 "ebs_params": [
                     {
                         "name": v.name,
@@ -206,12 +332,19 @@ def _build_context(config: ProjectConfig) -> dict:
         "environments": config.environments,
         "has_rds": config.rds is not None,
         "has_s3": len(config.s3_buckets) > 0,
-        "has_cloudfront": any(b.cloudfront for b in config.s3_buckets),
+        "has_cloudfront": any(
+            b.cloudfront and b.mode.value != "existing" for b in config.s3_buckets
+        ),
         "has_ec2": any(_enum_value(s.launch_type) == "ec2" for s in config.services),
         "has_service_discovery": any(
             s.enable_service_discovery for s in config.services
         ),
         "rds": config.rds,
+        "rds_master_username": (
+            _derive_rds_master_username(config.rds.database_name)
+            if config.rds is not None
+            else ""
+        ),
         "s3_buckets": config.s3_buckets,
         "alb": config.alb,
         "secrets": config.secrets,

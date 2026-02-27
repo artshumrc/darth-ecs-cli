@@ -21,12 +21,6 @@ Parameters:
   AlbSecurityGroupId:
     Type: String
 {% if has_rds %}
-  RdsEndpoint:
-    Type: String
-  RdsPort:
-    Type: String
-  RdsDatabaseName:
-    Type: String
   RdsSecretArn:
     Type: String
 {% endif %}
@@ -34,7 +28,7 @@ Parameters:
   CloudMapNamespaceId:
     Type: String
 {% endif %}
-{% for sec in secret_params %}
+{% for sec in secret_params if sec.requires_param %}
   {{ sec.param_name }}:
     Type: String
 {% endfor %}
@@ -42,6 +36,10 @@ Parameters:
   {{ s3.param_name }}:
     Type: String
   {{ s3.arn_param_name }}:
+    Type: String
+{% endfor %}
+{% for s3 in s3_vars if s3.cf_param_name %}
+  {{ s3.cf_param_name }}:
     Type: String
 {% endfor %}
 
@@ -59,7 +57,7 @@ Resources:
       VpcId: !Ref VpcId
 
   TaskSgIngressFromAlb:
-{% if svc.port is not none %}
+{% if has_alb_target %}
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !Ref TaskSecurityGroup
@@ -108,7 +106,7 @@ Resources:
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource:
-{% for sec in secret_params %}
+{% for sec in secret_params if sec.requires_param %}
                   - !Ref {{ sec.param_name }}
 {% endfor %}
 {% if has_rds %}
@@ -148,14 +146,19 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+{% for s3 in s3_vars %}
               - Effect: Allow
                 Action:
+{% if s3.read_only %}
+                  - s3:GetObject
+                  - s3:ListBucket
+{% else %}
                   - s3:GetObject
                   - s3:PutObject
                   - s3:DeleteObject
                   - s3:ListBucket
+{% endif %}
                 Resource:
-{% for s3 in s3_vars %}
                   - !Ref {{ s3.arn_param_name }}
                   - !Join ['', [!Ref {{ s3.arn_param_name }}, '/*']]
 {% endfor %}
@@ -275,7 +278,7 @@ Resources:
 {% if svc.image %}
           Image: {{ svc.image }}
 {% else %}
-          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}/{{ name }}:${EnvironmentName}-latest'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}/${EnvironmentName}/{{ name }}:latest'
 {% endif %}
           Essential: !!bool true
 {% if svc.command %}
@@ -304,29 +307,27 @@ Resources:
               Value: '{{ v }}'
 {% endfor %}
 {% if has_rds %}
-            - Name: DB_HOST
-              Value: !Ref RdsEndpoint
-            - Name: DB_PORT
-              Value: !Ref RdsPort
-            - Name: DB_NAME
-              Value: !Ref RdsDatabaseName
-            - Name: DB_USER
-              Value: !Ref RdsDatabaseName
+            - Name: DB_SECRET_ARN
+              Value: !Ref RdsSecretArn
 {% endif %}
 {% for s3 in s3_vars %}
             - Name: {{ s3.env_key }}
               Value: !Ref {{ s3.param_name }}
+{% if s3.cloudfront_env_key and s3.cf_param_name %}
+            - Name: {{ s3.cloudfront_env_key }}
+              Value: !Ref {{ s3.cf_param_name }}
+{% endif %}
 {% endfor %}
 {% if secret_params or has_rds %}
           Secrets:
 {% for sec in secret_params %}
             - Name: {{ sec.secret_name }}
+{% if sec.source == 'rds' %}
+              ValueFrom: !Sub '${RdsSecretArn}:{{ sec.rds_json_key }}::'
+{% else %}
               ValueFrom: !Ref {{ sec.param_name }}
-{% endfor %}
-{% if has_rds %}
-            - Name: DB_PASSWORD
-              ValueFrom: !Ref RdsSecretArn
 {% endif %}
+{% endfor %}
 {% endif %}
 {% if svc.port is not none %}
           PortMappings:
@@ -354,7 +355,7 @@ Resources:
             TTL: 10
 
 {% endif %}
-{% if svc.port is not none %}
+{% if has_alb_target %}
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -371,7 +372,7 @@ Resources:
         HttpCode: {{ svc.health_check_http_codes }}
 
 {% endif %}
-{% if svc.port is not none and has_cluster_routing_rules %}
+{% if has_alb_target and has_cluster_routing_rules %}
 {% if is_default_listener_target %}
   DefaultHostHeaderRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
@@ -426,7 +427,7 @@ Resources:
       EnableExecuteCommand: {{ 'true' if svc.enable_exec else 'false' }}
       LaunchType: {{ 'EC2' if launch_type == 'ec2' else 'FARGATE' }}
       TaskDefinition: !Ref TaskDefinition
-{% if svc.port is not none and svc.health_check_grace_period_seconds is not none %}
+{% if has_alb_target and svc.health_check_grace_period_seconds is not none %}
       HealthCheckGracePeriodSeconds: {{ svc.health_check_grace_period_seconds }}
 {% endif %}
       NetworkConfiguration:
@@ -438,7 +439,7 @@ Resources:
       ServiceRegistries:
         - RegistryArn: !GetAtt CloudMapService.Arn
 {% endif %}
-{% if svc.port is not none %}
+{% if has_alb_target %}
       LoadBalancers:
         - ContainerName: {{ name }}
           ContainerPort: !!int {{ svc.port }}
@@ -448,7 +449,9 @@ Resources:
 Outputs:
   ServiceName:
     Value: !Ref EcsService
-{% if svc.port is not none %}
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup
+{% if has_alb_target %}
   TargetGroupArn:
     Value: !Ref TargetGroup
 {% endif %}
