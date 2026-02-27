@@ -18,10 +18,10 @@ https://docs.docker.com/go/buildx/
 
 ```bash
 # Interactive project setup
-darth-infra init
+darth-infra tui
 
-# Resume a previously cancelled/incomplete wizard session
-darth-infra init --seed wizard-export.json
+# Re-run TUI (it auto-rehydrates from darth-infra.toml when present)
+darth-infra tui
 
 # Deploy production
 darth-infra deploy --env prod
@@ -52,7 +52,7 @@ darth-infra destroy --env dev
 
 ## How It Works
 
-1. **`darth-infra init`** — Interactive Textual TUI that walks you through project setup:
+1. **`darth-infra tui`** — Interactive Textual editor with validation for `darth-infra.toml`:
    - Project name, region, VPC
    - ECS services (name, Dockerfile, port)
    - Optional RDS PostgreSQL database
@@ -86,13 +86,13 @@ darth-infra destroy --env dev
    - Generate new secrets
    - Get environment-prefixed subdomains (e.g., `dev.myapp.example.com`)
 
-The interactive wizard always writes a raw draft/export file (`wizard-export.json` by default),
-including incomplete values, so sessions can be resumed later.
-Full wizard answers (including incomplete draft values) live in `wizard-export.json`.
+The interactive wizard rehydrates from `darth-infra.toml` when present.
+On quit/cancel, if confirmed wizard values differ from an existing `darth-infra.toml`,
+you are prompted to save or disregard those changes.
 
 ## Configuration
 
-The `darth-infra.toml` file is the source of truth. Example:
+The `darth-infra.toml` file is the source of truth and seed source for the wizard. Example:
 
 ```toml
 [project]

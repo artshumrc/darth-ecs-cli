@@ -241,7 +241,7 @@ def package_template(
     template_file = project_dir / "templates" / "generated" / "root.yaml"
     if not template_file.is_file():
         raise FileNotFoundError(
-            f"Missing template file: {template_file}. Run 'darth-infra init' first."
+            f"Missing template file: {template_file}. Run 'darth-infra tui' first."
         )
 
     output_template = build_dir / "packaged-root.yaml"

@@ -21,7 +21,7 @@ def cli() -> None:
     """darth-infra — Deploy websites to AWS ECS with multi-environment support."""
 
 
-cli.add_command(init_cmd, name="init")
+cli.add_command(init_cmd, name="tui")
 cli.add_command(deploy)
 cli.add_command(build)
 cli.add_command(push)

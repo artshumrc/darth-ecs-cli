@@ -28,6 +28,175 @@ from ...config.models import (
 )
 
 
+def build_config_from_state(state: dict) -> ProjectConfig:
+    s = state
+
+    service_names = [svc["name"] for svc in s.get("services", [])]
+    resolved_service_secrets: dict[str, list[str]] = {
+        name: [str(sec) for sec in svc.get("secrets", [])]
+        for name, svc in ((svc["name"], svc) for svc in s.get("services", []))
+    }
+    for sec in s.get("secrets", []):
+        sec_name = str(sec.get("name", "")).strip()
+        if not sec_name:
+            continue
+        for svc_name in sec.get("expose_to", []):
+            if svc_name not in service_names:
+                continue
+            if sec_name not in resolved_service_secrets[svc_name]:
+                resolved_service_secrets[svc_name].append(sec_name)
+
+    services = [
+        ServiceConfig(
+            name=svc["name"],
+            dockerfile=svc.get("dockerfile", "Dockerfile"),
+            build_context=svc.get("build_context", "."),
+            docker_build_target=svc.get("docker_build_target"),
+            image=svc.get("image"),
+            port=svc.get("port"),
+            health_check_path=svc.get("health_check_path", "/health"),
+            health_check_http_codes=svc.get("health_check_http_codes", "200-399"),
+            health_check_timeout_seconds=svc.get("health_check_timeout_seconds", 5),
+            health_check_interval_seconds=svc.get("health_check_interval_seconds", 30),
+            healthy_threshold_count=svc.get("healthy_threshold_count", 5),
+            unhealthy_threshold_count=svc.get("unhealthy_threshold_count", 2),
+            health_check_grace_period_seconds=svc.get(
+                "health_check_grace_period_seconds"
+            ),
+            cpu=svc.get("cpu", 256),
+            memory_mib=svc.get("memory_mib", 512),
+            command=svc.get("command"),
+            secrets=resolved_service_secrets.get(svc["name"], []),
+            launch_type=LaunchType(svc.get("launch_type", "fargate")),
+            ec2_instance_type=svc.get("ec2_instance_type"),
+            user_data_script=svc.get("user_data_script"),
+            user_data_script_content=svc.get("user_data_script_content"),
+            ebs_volumes=[
+                EbsVolumeConfig(
+                    name=v["name"],
+                    size_gb=v["size_gb"],
+                    mount_path=v["mount_path"],
+                    device_name=v.get("device_name", "/dev/xvdf"),
+                    volume_type=v.get("volume_type", "gp3"),
+                    filesystem_type=v.get("filesystem_type", "ext4"),
+                )
+                for v in svc.get("ebs_volumes", [])
+            ],
+            ulimits=[
+                UlimitConfig(
+                    name=u["name"],
+                    soft_limit=u["soft_limit"],
+                    hard_limit=u["hard_limit"],
+                )
+                for u in svc.get("ulimits", [])
+            ],
+            environment_variables=svc.get("environment_variables", {}),
+            enable_service_discovery=svc.get("enable_service_discovery", False),
+        )
+        for svc in s["services"]
+    ]
+
+    rds = None
+    if s.get("rds"):
+        r = s["rds"]
+        rds = RdsConfig(
+            database_name=r["database_name"],
+            instance_type=r.get("instance_type", "db.t4g.micro"),
+            allocated_storage_gb=r.get("allocated_storage_gb", 20),
+            expose_to=r.get("expose_to", []),
+        )
+
+    s3_buckets = []
+    for b in s.get("s3_buckets", []):
+        flat_connections: list[S3BucketConnection] = []
+        for conn in b.get("connections", []):
+            conn_services = conn.get("services")
+            if isinstance(conn_services, list) and conn_services:
+                connection_services = [str(service) for service in conn_services]
+            else:
+                service_name = str(conn.get("service", "")).strip()
+                connection_services = [service_name] if service_name else []
+
+            for service_name in connection_services:
+                flat_connections.append(
+                    S3BucketConnection(
+                        service=service_name,
+                        env_key=conn["env_key"],
+                        cloudfront_env_key=conn.get("cloudfront_env_key"),
+                        read_only=conn.get("read_only", False),
+                    )
+                )
+
+        s3_buckets.append(
+            S3BucketConfig(
+                name=b["name"],
+                mode=S3BucketMode(b.get("mode", "managed")),
+                existing_bucket_name=b.get("existing_bucket_name"),
+                seed_source_bucket_name=b.get("seed_source_bucket_name"),
+                seed_non_prod_only=b.get("seed_non_prod_only", True),
+                public_read=b.get("public_read", False),
+                cloudfront=b.get("cloudfront", False),
+                cors=b.get("cors", False),
+                connections=flat_connections,
+            )
+        )
+
+    secrets = [
+        SecretConfig(
+            name=sec["name"],
+            source=SecretSource(sec.get("source", "generate")),
+            existing_secret_name=sec.get("existing_secret_name"),
+            length=sec.get("length", 50),
+            generate_once=sec.get("generate_once", True),
+        )
+        for sec in s.get("secrets", [])
+    ]
+
+    alb = AlbConfig(
+        mode=AlbMode(s.get("alb_mode", "shared")),
+        shared_alb_name=s.get("shared_alb_name", ""),
+        shared_listener_arn=s.get("shared_listener_arn"),
+        shared_alb_security_group_id=s.get("shared_alb_security_group_id"),
+        certificate_arn=s.get("certificate_arn"),
+        domain=s.get("alb_domain"),
+        default_target_service=s.get("default_target_service"),
+        default_listener_priority=(
+            int(s["default_listener_priority"])
+            if s.get("default_listener_priority") is not None
+            and str(s.get("default_listener_priority")).strip() != ""
+            else None
+        ),
+        path_rules=[
+            AlbPathRule(
+                name=rule["name"],
+                path_pattern=rule["path_pattern"],
+                target_service=rule["target_service"],
+                priority=int(rule["priority"]),
+            )
+            for rule in s.get("alb_path_rules", [])
+        ],
+    )
+
+    return ProjectConfig(
+        project_name=s["project_name"],
+        aws_region=s["aws_region"],
+        vpc_name=s["vpc_name"],
+        vpc_id=(
+            None
+            if s.get("vpc_id") in {None, "", False, "Select.NULL", "Select.BLANK"}
+            else str(s.get("vpc_id"))
+        ),
+        private_subnet_ids=s.get("private_subnet_ids", []),
+        public_subnet_ids=s.get("public_subnet_ids", []),
+        environments=s["environments"],
+        services=services,
+        rds=rds,
+        s3_buckets=s3_buckets,
+        alb=alb,
+        secrets=secrets,
+    )
+
+
 class ReviewScreen(Screen):
     """Final screen: display project summary and confirm scaffolding."""
 
@@ -224,157 +393,4 @@ class ReviewScreen(Screen):
             self.app.finish(config)
 
     def _build_config(self) -> ProjectConfig:
-        s = self._state
-        resolved_service_secrets = self._resolve_service_secrets()
-
-        services = [
-            ServiceConfig(
-                name=svc["name"],
-                dockerfile=svc.get("dockerfile", "Dockerfile"),
-                build_context=svc.get("build_context", "."),
-                docker_build_target=svc.get("docker_build_target"),
-                image=svc.get("image"),
-                port=svc.get("port"),
-                health_check_path=svc.get("health_check_path", "/health"),
-                health_check_http_codes=svc.get("health_check_http_codes", "200-399"),
-                health_check_timeout_seconds=svc.get("health_check_timeout_seconds", 5),
-                health_check_interval_seconds=svc.get(
-                    "health_check_interval_seconds", 30
-                ),
-                healthy_threshold_count=svc.get("healthy_threshold_count", 5),
-                unhealthy_threshold_count=svc.get("unhealthy_threshold_count", 2),
-                health_check_grace_period_seconds=svc.get(
-                    "health_check_grace_period_seconds"
-                ),
-                cpu=svc.get("cpu", 256),
-                memory_mib=svc.get("memory_mib", 512),
-                command=svc.get("command"),
-                secrets=resolved_service_secrets.get(svc["name"], []),
-                launch_type=LaunchType(svc.get("launch_type", "fargate")),
-                ec2_instance_type=svc.get("ec2_instance_type"),
-                user_data_script=svc.get("user_data_script"),
-                user_data_script_content=svc.get("user_data_script_content"),
-                ebs_volumes=[
-                    EbsVolumeConfig(
-                        name=v["name"],
-                        size_gb=v["size_gb"],
-                        mount_path=v["mount_path"],
-                        device_name=v.get("device_name", "/dev/xvdf"),
-                        volume_type=v.get("volume_type", "gp3"),
-                        filesystem_type=v.get("filesystem_type", "ext4"),
-                    )
-                    for v in svc.get("ebs_volumes", [])
-                ],
-                ulimits=[
-                    UlimitConfig(
-                        name=u["name"],
-                        soft_limit=u["soft_limit"],
-                        hard_limit=u["hard_limit"],
-                    )
-                    for u in svc.get("ulimits", [])
-                ],
-                environment_variables=svc.get("environment_variables", {}),
-                enable_service_discovery=svc.get("enable_service_discovery", False),
-            )
-            for svc in s["services"]
-        ]
-
-        rds = None
-        if s.get("rds"):
-            r = s["rds"]
-            rds = RdsConfig(
-                database_name=r["database_name"],
-                instance_type=r.get("instance_type", "db.t4g.micro"),
-                allocated_storage_gb=r.get("allocated_storage_gb", 20),
-                expose_to=r.get("expose_to", []),
-            )
-
-        s3_buckets = []
-        for b in s.get("s3_buckets", []):
-            flat_connections: list[S3BucketConnection] = []
-            for conn in b.get("connections", []):
-                conn_services = conn.get("services")
-                if isinstance(conn_services, list) and conn_services:
-                    connection_services = [str(service) for service in conn_services]
-                else:
-                    service_name = str(conn.get("service", "")).strip()
-                    connection_services = [service_name] if service_name else []
-
-                for service_name in connection_services:
-                    flat_connections.append(
-                        S3BucketConnection(
-                            service=service_name,
-                            env_key=conn["env_key"],
-                            cloudfront_env_key=conn.get("cloudfront_env_key"),
-                            read_only=conn.get("read_only", False),
-                        )
-                    )
-
-            s3_buckets.append(
-                S3BucketConfig(
-                    name=b["name"],
-                    mode=S3BucketMode(b.get("mode", "managed")),
-                    existing_bucket_name=b.get("existing_bucket_name"),
-                    seed_source_bucket_name=b.get("seed_source_bucket_name"),
-                    seed_non_prod_only=b.get("seed_non_prod_only", True),
-                    public_read=b.get("public_read", False),
-                    cloudfront=b.get("cloudfront", False),
-                    cors=b.get("cors", False),
-                    connections=flat_connections,
-                )
-            )
-
-        secrets = [
-            SecretConfig(
-                name=sec["name"],
-                source=SecretSource(sec.get("source", "generate")),
-                existing_secret_name=sec.get("existing_secret_name"),
-                length=sec.get("length", 50),
-                generate_once=sec.get("generate_once", True),
-            )
-            for sec in s.get("secrets", [])
-        ]
-
-        alb = AlbConfig(
-            mode=AlbMode(s.get("alb_mode", "shared")),
-            shared_alb_name=s.get("shared_alb_name", ""),
-            shared_listener_arn=s.get("shared_listener_arn"),
-            shared_alb_security_group_id=s.get("shared_alb_security_group_id"),
-            certificate_arn=s.get("certificate_arn"),
-            domain=s.get("alb_domain"),
-            default_target_service=s.get("default_target_service"),
-            default_listener_priority=(
-                int(s["default_listener_priority"])
-                if s.get("default_listener_priority") is not None
-                and str(s.get("default_listener_priority")).strip() != ""
-                else None
-            ),
-            path_rules=[
-                AlbPathRule(
-                    name=rule["name"],
-                    path_pattern=rule["path_pattern"],
-                    target_service=rule["target_service"],
-                    priority=int(rule["priority"]),
-                )
-                for rule in s.get("alb_path_rules", [])
-            ],
-        )
-
-        return ProjectConfig(
-            project_name=s["project_name"],
-            aws_region=s["aws_region"],
-            vpc_name=s["vpc_name"],
-            vpc_id=(
-                None
-                if s.get("vpc_id") in {None, "", False, "Select.NULL", "Select.BLANK"}
-                else str(s.get("vpc_id"))
-            ),
-            private_subnet_ids=s.get("private_subnet_ids", []),
-            public_subnet_ids=s.get("public_subnet_ids", []),
-            environments=s["environments"],
-            services=services,
-            rds=rds,
-            s3_buckets=s3_buckets,
-            alb=alb,
-            secrets=secrets,
-        )
+        return build_config_from_state(self._state)

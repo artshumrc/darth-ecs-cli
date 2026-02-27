@@ -1,14 +1,19 @@
-"""Textual TUI application for ``darth-infra init``."""
+"""Textual TUI application for ``darth-infra tui``."""
 
 from __future__ import annotations
 
-from textual.app import App, ComposeResult
-from textual.binding import Binding
 from pathlib import Path
 
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, Static
+
+from ..config.loader import CONFIG_FILENAME, dump_config
 from ..config.models import ProjectConfig
 from .steps import STEP_ORDER
-from .wizard_export import merge_seed_state, save_wizard_export
+from .wizard_export import merge_seed_state
 from .screens.welcome import WelcomeScreen
 from .screens.existing_resources import ExistingResourcesScreen
 from .screens.services import ServicesScreen
@@ -16,7 +21,52 @@ from .screens.alb import AlbScreen
 from .screens.rds import RdsScreen
 from .screens.s3 import S3Screen
 from .screens.secrets import SecretsScreen
-from .screens.review import ReviewScreen
+from .screens.review import ReviewScreen, build_config_from_state
+
+
+class QuitSaveConfirmScreen(ModalScreen[str]):
+    """Modal prompt shown when wizard changes differ from darth-infra.toml."""
+
+    DEFAULT_CSS = """
+    QuitSaveConfirmScreen {
+        align: center middle;
+    }
+    QuitSaveConfirmScreen > Vertical {
+        width: 72;
+        border: round $accent;
+        padding: 1 2;
+        background: $surface;
+    }
+    QuitSaveConfirmScreen .button-row {
+        layout: horizontal;
+        align: center middle;
+        margin-top: 1;
+        height: auto;
+    }
+    QuitSaveConfirmScreen Button {
+        margin: 0 1;
+        min-width: 14;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(
+                "Save changes to darth-infra.toml before exit?", classes="title"
+            )
+            yield Static(
+                "The current wizard values differ from the existing darth-infra.toml."
+            )
+            with Vertical(classes="button-row"):
+                yield Button("Save", id="save", variant="primary")
+                yield Button("Disregard", id="disregard")
+                yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or "cancel"
+        if button_id not in {"save", "disregard", "cancel"}:
+            button_id = "cancel"
+        self.dismiss(button_id)
 
 
 class DarthEcsInitApp(App[None]):
@@ -140,16 +190,14 @@ class DarthEcsInitApp(App[None]):
         self,
         *,
         seed_state: dict | None = None,
-        wizard_export_path: str | None = None,
     ) -> None:
         super().__init__()
         self.result_config: ProjectConfig | None = None
-        self._completed = False
-        self._wizard_export_path = wizard_export_path
         self._state: dict = merge_seed_state(seed_state)
         self._state.setdefault("_wizard_last_screen", "welcome")
         self._state.setdefault("_wizard_draft", {})
         self._state.setdefault("_wizard_max_step_index", 0)
+        self._config_path = Path.cwd() / CONFIG_FILENAME
 
     def on_mount(self) -> None:
         start = self._state.get("_wizard_last_screen", "welcome")
@@ -221,15 +269,36 @@ class DarthEcsInitApp(App[None]):
 
     def finish(self, config: ProjectConfig) -> None:
         """Complete the wizard with a final config."""
-        self._completed = True
         self.result_config = config
-        self._save_export()
         self.exit()
 
-    def action_quit(self) -> None:
-        """Persist current draft and exit the wizard."""
-        self._save_export()
-        self.exit()
+    async def action_quit(self) -> None:
+        """Optionally persist confirmed changes to darth-infra.toml, then exit."""
+        self._flush_current_screen_state()
+
+        try:
+            candidate = build_config_from_state(self._state)
+        except Exception:
+            self.exit()
+            return
+
+        candidate_toml = dump_config(candidate)
+        current_toml = ""
+        if self._config_path.is_file():
+            current_toml = self._config_path.read_text()
+
+        if candidate_toml == current_toml:
+            self.exit()
+            return
+
+        choice = await self.push_screen_wait(QuitSaveConfirmScreen())
+        if choice == "save":
+            self._config_path.write_text(candidate_toml)
+            self.notify(f"Saved {self._config_path.name}", severity="information")
+            self.exit()
+            return
+        if choice == "disregard":
+            self.exit()
 
     def action_next_step(self) -> None:
         current = str(self._state.get("_wizard_last_screen", "welcome"))
@@ -247,12 +316,9 @@ class DarthEcsInitApp(App[None]):
         if idx > 0:
             self.go_to_step(STEP_ORDER[idx - 1])
 
-    def _save_export(self) -> None:
-        path = self._wizard_export_path
-        if not path:
-            return
+    def _flush_current_screen_state(self) -> None:
         current_screen = self.screen
-        # Best-effort flush of in-progress widget state into app state before export.
+        # Best-effort flush of in-progress widget state into app state.
         for hook_name in (
             "_capture_draft",
             "_persist_to_state",
@@ -263,11 +329,5 @@ class DarthEcsInitApp(App[None]):
                 try:
                     hook()
                 except Exception:
-                    # Export should never fail because a screen-specific draft hook errored.
+                    # Exit flow should never fail because a screen-specific draft hook errored.
                     pass
-        save_wizard_export(
-            Path(path),
-            state=self._state,
-            completed=self._completed,
-            last_screen=str(self._state.get("_wizard_last_screen", "welcome")),
-        )
