@@ -57,7 +57,7 @@ darth-infra destroy --env dev
    - ECS services (name, Dockerfile, port)
    - Optional RDS PostgreSQL database
    - Optional S3 buckets (with optional CloudFront)
-   - ALB mode and cluster routing (shared or dedicated)
+  - Shared ALB and cluster routing
    - Secrets management (auto-generated or from env vars)
 
 2. The TUI scaffolds a **complete CloudFormation YAML project** that you own and can customize.

@@ -8,7 +8,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Select, SelectionList, Static
 
@@ -21,9 +21,7 @@ class ExistingResourcesScreen(Screen):
     def __init__(self, state: dict) -> None:
         super().__init__()
         self._state = state
-        self._vpcs: dict[str, dict[str, Any]] = {}
         self._albs: dict[str, dict[str, Any]] = {}
-        self._fetching_vpcs = False
         self._fetching_subnets = False
         self._fetching_albs = False
         self._fetching_alb_details = False
@@ -33,17 +31,11 @@ class ExistingResourcesScreen(Screen):
             yield StepRail("existing-resources")
             yield Static("Existing Resources", classes="title")
             yield Static(
-                "Fetch from AWS, then select exactly which existing resources to use.",
+                "Fetch from AWS, then select existing subnet/ALB resources to use.",
             )
-
-            yield Label("VPC:", classes="section-label")
-            yield Button("Fetch VPCs", id="fetch_vpcs", variant="default")
-            yield Select([], id="vpc_select", prompt="Select VPC", allow_blank=True)
 
             yield Label("Private Subnets (multi-select):", classes="section-label")
-            yield Button(
-                "Fetch Subnets for Selected VPC", id="fetch_subnets", variant="default"
-            )
+            yield Button("Fetch Subnets for VPC", id="fetch_subnets", variant="default")
             yield SelectionList[str](id="private_subnet_select")
 
             yield Label("Public Subnets (multi-select):", classes="section-label")
@@ -82,6 +74,10 @@ class ExistingResourcesScreen(Screen):
                 [(subnet_id, subnet_id, True) for subnet_id in public_selected]
             )
 
+        saved_alb_name = str(self._state.get("shared_alb_name") or "").strip()
+        if saved_alb_name:
+            self._start_fetch_albs()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id.startswith("step_nav_"):
             target = event.button.id.replace("step_nav_", "", 1)
@@ -94,8 +90,6 @@ class ExistingResourcesScreen(Screen):
         elif event.button.id == "next":
             self._persist_to_state()
             self.app.advance_to("services")
-        elif event.button.id == "fetch_vpcs":
-            self._start_fetch_vpcs()
         elif event.button.id == "fetch_subnets":
             self._start_fetch_subnets()
         elif event.button.id == "fetch_albs":
@@ -127,75 +121,41 @@ class ExistingResourcesScreen(Screen):
         blank_sentinel = getattr(Select, "BLANK", object())
         return value in {None, "", False, null_sentinel, blank_sentinel}
 
-    def _start_fetch_vpcs(self) -> None:
-        if self._fetching_vpcs:
-            return
-        self._fetching_vpcs = True
-        self.query_one("#fetch_vpcs", Button).disabled = True
-        threading.Thread(target=self._fetch_vpcs_worker, daemon=True).start()
+    def _resolve_vpc_id(self) -> str | None:
+        state_vpc_id = str(self._state.get("vpc_id") or "").strip()
+        if state_vpc_id:
+            return state_vpc_id
 
-    def _fetch_vpcs_worker(self) -> None:
-        try:
-            ec2 = boto3.client("ec2", region_name=self._aws_region())
-            name_filter = str(self._state.get("vpc_name", "")).strip()
-            if name_filter:
-                vpcs = ec2.describe_vpcs(
-                    Filters=[{"Name": "tag:Name", "Values": [name_filter]}]
-                ).get("Vpcs", [])
-                if not vpcs:
-                    vpcs = ec2.describe_vpcs().get("Vpcs", [])
-            else:
-                vpcs = ec2.describe_vpcs().get("Vpcs", [])
+        vpc_name = str(self._state.get("vpc_name") or "").strip()
+        if not vpc_name:
+            return None
 
-            entries: list[tuple[str, str, dict[str, Any]]] = []
-            for vpc in vpcs:
-                vpc_id = vpc["VpcId"]
-                name = self._tag(vpc.get("Tags", []), "Name") or "(no Name tag)"
-                cidr = vpc.get("CidrBlock", "?")
-                label = f"{name} ({vpc_id}, {cidr})"
-                entries.append((label, vpc_id, vpc))
-
-            self.app.call_from_thread(self._complete_fetch_vpcs, entries, None)
-        except (ClientError, BotoCoreError, RuntimeError) as exc:
-            self.app.call_from_thread(self._complete_fetch_vpcs, [], str(exc))
-
-    def _complete_fetch_vpcs(
-        self,
-        entries: list[tuple[str, str, dict[str, Any]]],
-        err: str | None,
-    ) -> None:
-        scroll = self._capture_form_scroll()
-        self._fetching_vpcs = False
-        self.query_one("#fetch_vpcs", Button).disabled = False
-        if err:
-            self.notify(f"AWS lookup failed: {err}", severity="error")
-            self._restore_form_scroll(scroll)
-            return
-
-        self._vpcs = {vpc_id: vpc for _, vpc_id, vpc in entries}
-        select = self.query_one("#vpc_select", Select)
-        select.set_options([(label, vpc_id) for label, vpc_id, _ in entries])
-
-        existing_vpc_id = self._state.get("vpc_id")
-        if existing_vpc_id and existing_vpc_id in self._vpcs:
-            select.value = existing_vpc_id
-        elif entries:
-            select.value = entries[0][1]
-
-        self.notify("Fetched VPCs", severity="information")
-        self._restore_form_scroll(scroll)
+        ec2 = boto3.client("ec2", region_name=self._aws_region())
+        vpcs = ec2.describe_vpcs(
+            Filters=[{"Name": "tag:Name", "Values": [vpc_name]}]
+        ).get("Vpcs", [])
+        if not vpcs:
+            return None
+        return str(vpcs[0]["VpcId"])
 
     def _start_fetch_subnets(self) -> None:
         if self._fetching_subnets:
             return
-        vpc_id = self.query_one("#vpc_select", Select).value
-        if self._is_select_empty(vpc_id):
-            self.notify("Select a VPC first", severity="error")
+        try:
+            vpc_id = self._resolve_vpc_id()
+        except (ClientError, BotoCoreError, RuntimeError) as exc:
+            self.notify(f"AWS lookup failed: {exc}", severity="error")
             return
+
+        if not vpc_id:
+            self.notify("No matching VPC found from Project settings", severity="error")
+            return
+
+        self._state["vpc_id"] = vpc_id
         self._fetching_subnets = True
         self.query_one("#fetch_subnets", Button).disabled = True
         threading.Thread(
-            target=self._fetch_subnets_worker, args=(str(vpc_id),), daemon=True
+            target=self._fetch_subnets_worker, args=(vpc_id,), daemon=True
         ).start()
 
     def _fetch_subnets_worker(self, vpc_id: str) -> None:
@@ -219,13 +179,24 @@ class ExistingResourcesScreen(Screen):
             private_entries.sort(key=lambda x: x[0])
             public_entries.sort(key=lambda x: x[0])
             self.app.call_from_thread(
-                self._complete_fetch_subnets, private_entries, public_entries, None
+                self._complete_fetch_subnets,
+                vpc_id,
+                private_entries,
+                public_entries,
+                None,
             )
         except (ClientError, BotoCoreError, RuntimeError) as exc:
-            self.app.call_from_thread(self._complete_fetch_subnets, [], [], str(exc))
+            self.app.call_from_thread(
+                self._complete_fetch_subnets,
+                vpc_id,
+                [],
+                [],
+                str(exc),
+            )
 
     def _complete_fetch_subnets(
         self,
+        vpc_id: str,
         private_entries: list[tuple[str, str]],
         public_entries: list[tuple[str, str]],
         err: str | None,
@@ -237,6 +208,8 @@ class ExistingResourcesScreen(Screen):
             self.notify(f"AWS lookup failed: {err}", severity="error")
             self._restore_form_scroll(scroll)
             return
+
+        self._state["vpc_id"] = vpc_id
 
         private_selected = set(self._state.get("private_subnet_ids", []))
         public_selected = set(self._state.get("public_subnet_ids", []))
@@ -305,14 +278,20 @@ class ExistingResourcesScreen(Screen):
         select = self.query_one("#alb_select", Select)
         select.set_options([(label, arn) for label, arn, _ in entries])
 
-        current_name = str(self._state.get("shared_alb_name") or "")
+        current_name = str(self._state.get("shared_alb_name") or "").strip()
+        matched_saved = False
         for _, arn, alb in entries:
-            if alb.get("LoadBalancerName") == current_name:
+            if alb.get("LoadBalancerName") == current_name or arn == current_name:
                 select.value = arn
+                matched_saved = True
                 break
-        else:
-            if entries:
-                select.value = entries[0][1]
+        if not matched_saved and entries:
+            select.value = entries[0][1]
+            if current_name:
+                self.notify(
+                    f"Saved shared ALB '{current_name}' was not found; selected first available ALB",
+                    severity="warning",
+                )
 
         self.notify("Fetched ALBs", severity="information")
         self._restore_form_scroll(scroll)
@@ -340,15 +319,21 @@ class ExistingResourcesScreen(Screen):
             )
             preferred = next(
                 (
-                    l
-                    for l in listeners
-                    if l.get("Protocol") == "HTTPS" and l.get("Port") == 443
+                    listener
+                    for listener in listeners
+                    if listener.get("Protocol") == "HTTPS"
+                    and listener.get("Port") == 443
                 ),
                 None,
             )
             if not preferred:
                 preferred = next(
-                    (l for l in listeners if l.get("Port") in {80, 443}), None
+                    (
+                        listener
+                        for listener in listeners
+                        if listener.get("Port") in {80, 443}
+                    ),
+                    None,
                 )
             if not preferred:
                 raise RuntimeError("Could not find a listener on selected ALB")
@@ -391,8 +376,6 @@ class ExistingResourcesScreen(Screen):
         self._restore_form_scroll(scroll)
 
     def _persist_to_state(self) -> None:
-        vpc_id = self.query_one("#vpc_select", Select).value
-        self._state["vpc_id"] = None if self._is_select_empty(vpc_id) else str(vpc_id)
         self._state["private_subnet_ids"] = [
             str(subnet_id)
             for subnet_id in self.query_one(

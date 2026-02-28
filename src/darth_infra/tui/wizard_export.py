@@ -173,7 +173,7 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                 }
             ),
             "s3_buckets": s3_buckets,
-            "alb_mode": str(getattr(config.alb.mode, "value", config.alb.mode)),
+            "alb_mode": "shared",
             "shared_alb_name": config.alb.shared_alb_name,
             "shared_listener_arn": config.alb.shared_listener_arn,
             "shared_alb_security_group_id": config.alb.shared_alb_security_group_id,

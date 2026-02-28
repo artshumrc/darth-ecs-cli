@@ -50,6 +50,36 @@ def _derive_rds_master_username(database_name: str) -> str:
     return normalized[:16].lower()
 
 
+def _normalize_rds_json_key(value: str | None) -> str | None:
+    """Normalize RDS JSON key aliases/display labels to canonical keys."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw in {"host", "port", "dbname", "username", "password"}:
+        return raw
+
+    lowered = raw.lower().strip()
+    if lowered.startswith("rds"):
+        lowered = lowered[3:].strip()
+    compact = "".join(ch for ch in lowered if ch.isalnum())
+
+    aliases = {
+        "host": "host",
+        "port": "port",
+        "dbname": "dbname",
+        "database": "dbname",
+        "databasename": "dbname",
+        "db": "dbname",
+        "user": "username",
+        "username": "username",
+        "pass": "password",
+        "password": "password",
+    }
+    return aliases.get(compact, raw)
+
+
 def generate_project(config: ProjectConfig, output_dir: Path) -> Path:
     """Render the full CloudFormation project into *output_dir*.
 
@@ -218,7 +248,7 @@ def _build_context(config: ProjectConfig) -> dict:
             source = _enum_value(secret_cfg.source) if secret_cfg else "generate"
             rds_key = None
             if source == "rds":
-                rds_key = (
+                rds_key = _normalize_rds_json_key(
                     str(secret_cfg.existing_secret_name).strip()
                     if secret_cfg and secret_cfg.existing_secret_name
                     else rds_secret_key_by_env.get(sec_name)

@@ -467,17 +467,28 @@ class SecretsScreen(Screen):
                 severity="error",
             )
             return None
-        existing_secret_id = (
-            existing_secret_name
-            if source == "rds"
-            else self._resolve_existing_secret_id(existing_secret_name)
-        )
+
+        if source == "rds":
+            existing_secret_id = existing_secret_name
+            # Keep the canonical JSON key for managed RDS secrets when editing,
+            # even if the UI field shows a display label like "RDS dbname".
+            if self._editing_index is not None and self._editing_index < len(
+                self._state.get("secrets", [])
+            ):
+                current = self._state.get("secrets", [])[self._editing_index]
+                canonical = str(current.get("existing_secret_name") or "").strip()
+                if canonical:
+                    existing_secret_id = canonical
+            display_name = existing_secret_name or existing_secret_id
+        else:
+            existing_secret_id = self._resolve_existing_secret_id(existing_secret_name)
+            display_name = existing_secret_name or None
 
         return {
             "name": name,
             "source": source,
             "existing_secret_name": existing_secret_id or None,
-            "existing_secret_display_name": existing_secret_name or None,
+            "existing_secret_display_name": display_name,
             "length": length,
             "generate_once": True,
             "expose_to": list(self._expose_to),

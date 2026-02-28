@@ -10,10 +10,10 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
-from ..config.loader import CONFIG_FILENAME, dump_config
+from ..config.loader import CONFIG_FILENAME, dump_config, find_config, load_config
 from ..config.models import ProjectConfig
 from .steps import STEP_ORDER
-from .wizard_export import merge_seed_state
+from .wizard_export import merge_seed_state, project_config_to_wizard_state
 from .screens.welcome import WelcomeScreen
 from .screens.existing_resources import ExistingResourcesScreen
 from .screens.services import ServicesScreen
@@ -197,7 +197,11 @@ class DarthEcsInitApp(App[None]):
         self._state.setdefault("_wizard_last_screen", "welcome")
         self._state.setdefault("_wizard_draft", {})
         self._state.setdefault("_wizard_max_step_index", 0)
-        self._config_path = Path.cwd() / CONFIG_FILENAME
+        try:
+            self._config_path = find_config(Path.cwd())
+        except FileNotFoundError:
+            self._config_path = Path.cwd() / CONFIG_FILENAME
+        self._pending_quit_toml: str | None = None
 
     def on_mount(self) -> None:
         start = self._state.get("_wizard_last_screen", "welcome")
@@ -272,7 +276,7 @@ class DarthEcsInitApp(App[None]):
         self.result_config = config
         self.exit()
 
-    async def action_quit(self) -> None:
+    def action_quit(self) -> None:
         """Optionally persist confirmed changes to darth-infra.toml, then exit."""
         self._flush_current_screen_state()
 
@@ -285,20 +289,40 @@ class DarthEcsInitApp(App[None]):
         candidate_toml = dump_config(candidate)
         current_toml = ""
         if self._config_path.is_file():
+            try:
+                existing_config = load_config(self._config_path)
+                existing_tui_state = project_config_to_wizard_state(existing_config)
+                existing_tui_config = build_config_from_state(existing_tui_state)
+                if candidate == existing_tui_config:
+                    self.exit()
+                    return
+            except Exception:
+                pass
             current_toml = self._config_path.read_text()
 
         if candidate_toml == current_toml:
             self.exit()
             return
 
-        choice = await self.push_screen_wait(QuitSaveConfirmScreen())
-        if choice == "save":
-            self._config_path.write_text(candidate_toml)
+        self._pending_quit_toml = candidate_toml
+        self.push_screen(QuitSaveConfirmScreen(), self._handle_quit_choice)
+
+    def _handle_quit_choice(self, choice: str | None) -> None:
+        if choice == "save" and self._pending_quit_toml is not None:
+            self._config_path.write_text(self._pending_quit_toml)
             self.notify(f"Saved {self._config_path.name}", severity="information")
+            self._pending_quit_toml = None
+            self.exit()
+            return
+        if choice == "save":
+            self._pending_quit_toml = None
             self.exit()
             return
         if choice == "disregard":
+            self._pending_quit_toml = None
             self.exit()
+            return
+        self._pending_quit_toml = None
 
     def action_next_step(self) -> None:
         current = str(self._state.get("_wizard_last_screen", "welcome"))

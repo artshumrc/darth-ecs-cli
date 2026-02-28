@@ -24,7 +24,7 @@ class WelcomeScreen(Screen):
         draft = self._draft()
         with VerticalScroll(classes="form-container"):
             yield StepRail("welcome")
-            yield Static("darth-infra — New Project Setup", classes="title")
+            yield Static("darth-infra — Project Setup", classes="title")
 
             yield Label("Project name (kebab-case):", classes="section-label")
             yield Input(
@@ -37,7 +37,9 @@ class WelcomeScreen(Screen):
             yield Input(
                 placeholder="us-east-1",
                 id="aws_region",
-                value=draft.get("aws_region", self._state.get("aws_region", "us-east-1")),
+                value=draft.get(
+                    "aws_region", self._state.get("aws_region", "us-east-1")
+                ),
             )
 
             yield Label("VPC name:", classes="section-label")

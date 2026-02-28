@@ -12,10 +12,10 @@ STEP_ORDER = [
 ]
 
 STEP_LABELS = {
-    "welcome": "Welcome",
+    "welcome": "Project",
     "existing-resources": "Resources",
     "services": "Services",
-    "alb": "ALB",
+    "alb": "Routing",
     "rds": "RDS",
     "s3": "S3",
     "secrets": "Secrets",
