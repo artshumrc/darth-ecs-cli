@@ -346,11 +346,13 @@ class ExistingResourcesScreen(Screen):
                 alb_name,
                 preferred["ListenerArn"],
                 alb_sg,
+                str(preferred.get("Protocol") or "").strip() or None,
+                int(preferred.get("Port", 0)) or None,
                 None,
             )
         except (ClientError, BotoCoreError, RuntimeError) as exc:
             self.app.call_from_thread(
-                self._complete_fetch_alb_details, "", "", "", str(exc)
+                self._complete_fetch_alb_details, "", "", "", None, None, str(exc)
             )
 
     def _complete_fetch_alb_details(
@@ -358,6 +360,8 @@ class ExistingResourcesScreen(Screen):
         alb_name: str,
         listener_arn: str,
         alb_sg: str,
+        listener_protocol: str | None,
+        listener_port: int | None,
         err: str | None,
     ) -> None:
         scroll = self._capture_form_scroll()
@@ -372,6 +376,8 @@ class ExistingResourcesScreen(Screen):
             self._state["shared_alb_name"] = alb_name
         self.query_one("#shared_listener_arn", Input).value = listener_arn
         self.query_one("#shared_alb_sg_id", Input).value = alb_sg
+        self._state["shared_listener_protocol"] = listener_protocol
+        self._state["shared_listener_port"] = listener_port
         self.notify("Fetched selected ALB details", severity="information")
         self._restore_form_scroll(scroll)
 
