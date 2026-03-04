@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.4.0
+
+### Minor Changes
+
+- [`5f51aa2`](https://github.com/artshumrc/darth-infra-cli/commit/5f51aa25284bb1999c7631b87510bafb4948c60f) Thanks [@d-flood](https://github.com/d-flood)! - Enable adding cloudfront in front of the alb
+
 ## 0.3.0
 
 ### Minor Changes
